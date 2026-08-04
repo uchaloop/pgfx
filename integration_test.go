@@ -93,7 +93,7 @@ func TestFxLifecycleIntegration(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(integrationConfig(host, 5*time.Second)),
-		Module(),
+		Module,
 		fx.Invoke(func(got *pgxpool.Pool) { pool = got }),
 	)
 	if err := app.Err(); err != nil {
@@ -136,7 +136,7 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
-		Module(),
+		Module,
 		fx.Invoke(func(got *pgxpool.Pool) { pool = got }),
 	)
 	if err := app.Err(); err != nil {

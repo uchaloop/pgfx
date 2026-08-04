@@ -10,7 +10,7 @@ serializable `Config`. Runtime dependencies (tracer, query metrics, pool hooks,
 an in-memory `*tls.Config`) are supplied through `Option`s, never through
 `Config`.
 
-`Module()` consumes a `pgfx.Config` from the
+`Module` consumes a `pgfx.Config` from the
 [Uber Fx](https://github.com/uber-go/fx) container and hands back a ready pool;
 `ModuleFor(name)` adds a replica or another shard. **Multiple databases are just
 multiple named connections.** pgfx does not read any config source itself, so it
@@ -75,17 +75,17 @@ pgfx consumes a `pgfx.Config` from the container; the application provides it.
 The recommended source is
 [`confmaker/confx`](https://github.com/uchaloop/confmaker), which loads a TOML
 section plus environment into the `Config`. For a single connection: load the
-file, provide the default `Config`, and add `pgfx.Module()`:
+file, provide the default `Config`, and add `pgfx.Module`:
 
 ```go
 fx.New(
 	confx.LoadModule("config/local.toml"),
 	confx.ProvideDefault[pgfx.Config]("postgres"), // untagged Config, POSTGRES_* env
-	pgfx.Module(),                                 // untagged *pgxpool.Pool
+	pgfx.Module,                                   // untagged *pgxpool.Pool
 )
 ```
 
-`pgfx.Module()` provides an **untagged** `*pgxpool.Pool`, so repositories just
+`pgfx.Module` provides an **untagged** `*pgxpool.Pool`, so repositories just
 depend on `*pgxpool.Pool` - no tags, no wrappers:
 
 ```go
@@ -118,7 +118,7 @@ fx.New(
 	confx.LoadModule("config/local.toml"),
 	confx.ProvideDefault[pgfx.Config]("postgres"),         // untagged primary
 	confx.Provide[pgfx.Config]("replica", "replica"),      // tagged name:"replica"
-	pgfx.Module(),
+	pgfx.Module,
 	pgfx.ModuleFor("replica"),
 )
 ```

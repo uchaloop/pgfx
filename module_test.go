@@ -18,7 +18,7 @@ func TestModuleGraphValid(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
 		fx.Supply(validConfig()),
-		Module(),
+		Module,
 		fx.Invoke(func(*pgxpool.Pool) {}),
 	)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestMultiplePoolsGraphNoConflict(t *testing.T) {
 		fx.Supply(validConfig()),
 		fx.Supply(fx.Annotate(validConfig(), fx.ResultTags(`name:"replica"`))),
 		fx.Supply(fx.Annotate(validConfig(), fx.ResultTags(`name:"analytics"`))),
-		Module(),
+		Module,
 		ModuleFor("replica"),
 		ModuleFor("analytics"),
 		fx.Invoke(fx.Annotate(
@@ -77,7 +77,7 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 		fx.NopLogger,
 		fx.Supply(primaryCfg),
 		fx.Supply(fx.Annotate(replicaCfg, fx.ResultTags(`name:"replica"`))),
-		Module(),
+		Module,
 		ModuleFor("replica"),
 		fx.Invoke(fx.Annotate(
 			func(p, r *pgxpool.Pool) { primary, replica = p, r },
@@ -119,7 +119,7 @@ func TestModuleBuildsWithoutPassword(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
-		Module(),
+		Module,
 		fx.Invoke(func(p *pgxpool.Pool) { pool = p }),
 	)
 	if err := app.Err(); err != nil {
@@ -134,7 +134,7 @@ func TestModuleBuildsWithoutPassword(t *testing.T) {
 func TestModuleRequiresConfig(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
-		Module(),
+		Module,
 		fx.Invoke(func(*pgxpool.Pool) {}),
 	)
 	if err == nil {

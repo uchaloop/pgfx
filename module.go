@@ -20,15 +20,13 @@ import (
 //	fx.New(
 //		confx.LoadModule("config/local.toml"),
 //		confx.ProvideDefault[pgfx.Config]("postgres"),
-//		pgfx.Module(),
+//		pgfx.Module,
 //	)
 //
 // The pool is pinged on start (fail-fast on a dead database) and closed on stop,
 // and takes an optional trace.TracerProvider and QueryMetricFunc from the
 // container.
-func Module() fx.Option {
-	return fx.Module("pgfx", poolProvider(``))
-}
+var Module = fx.Module("pgfx", poolProvider(``))
 
 // ModuleFor is an Fx module for a named connection - a replica or another shard.
 // It consumes a pgfx.Config tagged name:"<name>" and provides a *pgxpool.Pool

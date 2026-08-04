@@ -5,6 +5,14 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-04
+
+### Changed
+
+- `Module` is now a package-level `fx.Option` variable, not a `Module()`
+  function: wire it as `pgfx.Module`, not `pgfx.Module()`. `ModuleFor(name)` is
+  unchanged. Breaking change for callers of the default module.
+
 ## [0.1.0] - 2026-08-04
 
 ### Added
@@ -39,4 +47,5 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
+[0.1.1]: https://github.com/uchaloop/pgfx/releases/tag/v0.1.1
 [0.1.0]: https://github.com/uchaloop/pgfx/releases/tag/v0.1.0
