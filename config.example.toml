@@ -6,7 +6,7 @@
 # holds only open settings - passwords come from the environment, never here.
 
 # ---------------------------------------------------------------------------
-# Default connection - confx.ProvideDefault[pgfx.Config]("postgres") + pgfx.Module().
+# Default connection - confx.ProvideDefault[pgfx.Config]("postgres") + pgfx.Module.
 # Environment prefix: POSTGRES_
 # ---------------------------------------------------------------------------
 [postgres]
