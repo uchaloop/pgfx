@@ -2,12 +2,41 @@ package pgfx
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/uchaloop/secret"
+	"github.com/uchaloop/secret/v2"
 )
+
+func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
+	secretType := reflect.TypeOf(secret.Secret{})
+
+	var walk func(reflect.Type, string)
+	walk = func(typ reflect.Type, path string) {
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			fieldPath := field.Name
+			if path != "" {
+				fieldPath = path + "." + field.Name
+			}
+
+			if field.Type.Kind() == reflect.Struct && field.Type != secretType {
+				if field.Tag.Get("envPrefix") == "" {
+					t.Errorf("%s has no envPrefix tag", fieldPath)
+				}
+				walk(field.Type, fieldPath)
+				continue
+			}
+			if field.Tag.Get("env") == "" {
+				t.Errorf("%s has no env tag", fieldPath)
+			}
+		}
+	}
+
+	walk(reflect.TypeOf(Config{}), "")
+}
 
 func TestResolveEndpoint(t *testing.T) {
 	const dp uint16 = 5432
@@ -80,7 +109,7 @@ func TestPoolConfigSetsConnectionAndKeepsPasswordOutOfDSN(t *testing.T) {
 		Host:     "db:6543",
 		Database: "app",
 		User:     "orders",
-		Password: secret.Secret("s3cr3t"),
+		Password: secret.New("s3cr3t"),
 		AppName:  "orders-service",
 		TLS:      TLSConfig{Mode: "disable"}, // avoid cert I/O
 		Pool:     PoolConfig{MaxConns: 20},
@@ -223,7 +252,7 @@ func TestPoolConfigZeroPoolLimitsKeepPgxDefaults(t *testing.T) {
 }
 
 func TestConfigMasksPassword(t *testing.T) {
-	cfg := Config{Password: secret.Secret("hunter2")}
+	cfg := Config{Password: secret.New("hunter2")}
 	if out := fmt.Sprintf("%+v", cfg); strings.Contains(out, "hunter2") {
 		t.Fatalf("Config %%+v leaks the password: %s", out)
 	}

@@ -17,8 +17,8 @@ multiple named connections.** pgfx does not read any config source itself, so it
 stays decoupled: the application supplies each `Config`, typically loaded from a
 file and the environment with
 [`confmaker/confx`](https://github.com/uchaloop/confmaker). pgfx depends only on
-[`github.com/uchaloop/secret`](https://github.com/uchaloop/secret) (for the masked
-password), not on any config or env stack.
+[`github.com/uchaloop/secret/v2`](https://pkg.go.dev/github.com/uchaloop/secret/v2)
+(for the masked password), not on any config or env stack.
 
 ## Install
 
@@ -28,11 +28,10 @@ go get github.com/uchaloop/pgfx
 
 ## Config
 
-`Config` is a plain, serializable struct. `Host` reads from the file or the
-environment (env wins); `Database`/`User`/`TLS`/`Pool`/`Timeouts` are file-only;
-`Password` is env-only - a
-[`secret.Secret`](https://github.com/uchaloop/secret) that masks itself in
-logs and dumps, and placing it in the file is rejected.
+`Config` is a plain, serializable struct. Every open field can be read from a
+file or the environment (env wins). `Password` is env-only - a
+[`secret.Secret`](https://pkg.go.dev/github.com/uchaloop/secret/v2) that masks
+itself in logs and dumps, and placing it in the file is rejected.
 
 **Host** and **Database** are required. **User** and **Password** are optional:
 when empty they fall back to libpq's defaults (`PGUSER` / the OS user, and
@@ -84,6 +83,21 @@ fx.New(
 	pgfx.Module,                                   // untagged *pgxpool.Pool
 )
 ```
+
+Without a configuration file, fill the same `Config` entirely from environment
+variables:
+
+```go
+fx.New(
+	confx.ProvideNoFileDefault[pgfx.Config]("postgres"),
+	pgfx.Module,
+)
+```
+
+The main variables are `POSTGRES_HOST`, `POSTGRES_DATABASE`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD` and `POSTGRES_APP_NAME`. Nested settings use structural
+prefixes, for example `POSTGRES_TLS_MODE`, `POSTGRES_POOL_MAX_CONNS` and
+`POSTGRES_TIMEOUTS_CONNECT`.
 
 `pgfx.Module` provides an **untagged** `*pgxpool.Pool`, so repositories just
 depend on `*pgxpool.Pool` - no tags, no wrappers:
