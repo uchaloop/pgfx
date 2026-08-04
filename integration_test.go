@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/uchaloop/secret"
+	"github.com/uchaloop/secret/v2"
 	"go.uber.org/fx"
 )
 
@@ -178,7 +178,7 @@ func integrationConfig(host string, connect time.Duration) Config {
 		Host:     host,
 		Database: testEnv("PGFX_TEST_DATABASE", "pgfx_test"),
 		User:     testEnv("PGFX_TEST_USER", "postgres"),
-		Password: secret.Secret(os.Getenv("PGFX_TEST_PASSWORD")),
+		Password: secret.New(os.Getenv("PGFX_TEST_PASSWORD")),
 		TLS:      TLSConfig{Mode: "disable"},
 		Timeouts: TimeoutConfig{Connect: connect},
 	}
