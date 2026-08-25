@@ -40,7 +40,7 @@ only what it means to change.
 `confx.Manifest[pgfx.Config]("postgres")` lists every variable a connection
 reads, with its type and default.
 
-For verified TLS, use `verify-full` with `root_cert`. Use `WithTLS` when the
+For verified TLS, use `verify-full` with `TLS_ROOT_CERT`. Use `WithTLS` when the
 application already has an in-memory `*tls.Config`:
 
 ```go
