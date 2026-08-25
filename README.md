@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/uchaloop/pgfx/actions/workflows/ci.yml/badge.svg)](https://github.com/uchaloop/pgfx/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/uchaloop/pgfx.svg)](https://pkg.go.dev/github.com/uchaloop/pgfx)
-[![License: MIT](https://img.shields.io/badge/github/license/uchaloop/pgfx)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/uchaloop/pgfx)](LICENSE)
 
 PostgreSQL connections, queries, transactions, tracing, and Uber Fx lifecycle
 management on top of [`pgx`](https://github.com/jackc/pgx).
@@ -15,36 +15,30 @@ go get github.com/uchaloop/pgfx
 
 ## Configuration
 
-```toml
-[postgres]
-host = "localhost:5432"
-database = "orders"
-user = "orders"
-app_name = "orders-api"
-
-[postgres.tls]
-mode = "verify-full"
-root_cert = "/run/secrets/ca.crt"
-
-[postgres.pool]
-max_conns = 20
-
-[postgres.timeouts]
-connect = "5s"
-```
-
-`host` and `database` are required. When `user` or `password` is empty, pgx uses
-its normal libpq-compatible defaults. Passwords are environment-only:
+A connection is configured from the environment, under the prefix the
+application gives it:
 
 ```text
-POSTGRES_PASSWORD
+POSTGRES_HOST=localhost:5432
+POSTGRES_DATABASE=orders
+POSTGRES_USER=orders
+POSTGRES_PASSWORD=...
+POSTGRES_APP_NAME=orders-api
+
+POSTGRES_TLS_MODE=verify-full
+POSTGRES_TLS_ROOT_CERT=/run/secrets/ca.crt
+
+POSTGRES_POOL_MAX_CONNS=20
+POSTGRES_TIMEOUTS_CONNECT=5s
 ```
 
-Other fields can also be overridden through variables such as
-`POSTGRES_HOST`, `POSTGRES_POOL_MAX_CONNS`, and
-`POSTGRES_TIMEOUTS_CONNECT`.
+`POSTGRES_HOST` and `POSTGRES_DATABASE` must be supplied. When `USER` or
+`PASSWORD` is empty, pgx uses its normal libpq-compatible defaults. Every pool
+and timeout field left unset keeps the pgxpool default, so a deployment sets
+only what it means to change.
 
-See [config.example.toml](config.example.toml) for every available field.
+`confx.Manifest[pgfx.Config]("postgres")` lists every variable a connection
+reads, with its type and default.
 
 For verified TLS, use `verify-full` with `root_cert`. Use `WithTLS` when the
 application already has an in-memory `*tls.Config`:
@@ -59,8 +53,8 @@ Load one default connection:
 
 ```go
 fx.New(
-	confx.LoadDir("config"),
-	confx.ProvideDefault[pgfx.Config]("postgres"),
+	confx.Module(),
+	confx.Provide[pgfx.Config]("postgres"),
 	pgfx.Module,
 )
 ```
@@ -68,36 +62,21 @@ fx.New(
 `pgfx.Module` provides an untagged `*pgxpool.Pool`, verifies the connection
 during startup, and closes the pool during shutdown.
 
-Add a named replica or shard:
-
-```toml
-[postgres]
-host = "primary:5432"
-database = "orders"
-
-[replica]
-host = "replica:5432"
-database = "orders"
-```
+Add a named replica or shard - the name gives both the Fx tag and the prefix,
+so `replica` reads `REPLICA_HOST` and the rest:
 
 ```go
 fx.New(
-	confx.LoadDir("config"),
-	confx.ProvideDefault[pgfx.Config]("postgres"),
-	confx.Provide[pgfx.Config]("replica", "replica"),
+	confx.Module(),
+	confx.Provide[pgfx.Config]("postgres"),
+	confx.ProvideNamed[pgfx.Config]("replica"),
 	pgfx.Module,
 	pgfx.ModuleFor("replica"),
 )
 ```
 
-Without a configuration file:
-
-```go
-fx.New(
-	confx.ProvideNoFileDefault[pgfx.Config]("postgres"),
-	pgfx.Module,
-)
-```
+A replica inherits nothing from the default connection: its database, user and
+TLS settings are given again under its own prefix.
 
 Without Fx:
 

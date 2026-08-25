@@ -79,7 +79,8 @@ func TestResolveEndpoint(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
-	// Only Host and Database are required; User and Password are optional.
+	// User and Password are optional; Host and Database are checked here as well
+	// as by their notEmpty tags, so a Config built in Go is covered too.
 	valid := Config{Host: "db:5432", Database: "app"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
@@ -101,6 +102,46 @@ func TestConfigValidate(t *testing.T) {
 				t.Fatalf("expected error for %q", name)
 			}
 		})
+	}
+}
+
+// TestConfigValidateReportsEveryProblem keeps the accumulating style: a
+// deployment is fixed in a config map and rolled out, so one report per rollout
+// is the difference between one round trip and three.
+func TestConfigValidateReportsEveryProblem(t *testing.T) {
+	cfg := Config{
+		Host:     "db:x",
+		Database: "app",
+		Pool:     PoolConfig{MaxConns: -1},
+		Timeouts: TimeoutConfig{Connect: -1},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected the three problems to be reported")
+	}
+
+	for _, want := range []string{"invalid host", "pool.max_conns", "timeouts.connect"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the report is missing %q:\n%v", want, err)
+		}
+	}
+}
+
+// TestConfigRequiresItsVariables pins what moved out of Validate: the env tags
+// are what make a deployment supply a host and a database.
+func TestConfigRequiresItsVariables(t *testing.T) {
+	tags := map[string]string{"Host": "HOST,notEmpty", "Database": "DATABASE,notEmpty"}
+
+	configType := reflect.TypeFor[Config]()
+	for field, want := range tags {
+		declared, ok := configType.FieldByName(field)
+		if !ok {
+			t.Fatalf("no field %s", field)
+		}
+		if got := declared.Tag.Get("env"); got != want {
+			t.Errorf("%s env tag = %q, want %q", field, got, want)
+		}
 	}
 }
 

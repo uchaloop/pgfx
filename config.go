@@ -19,36 +19,34 @@ const defaultPostgresPort uint16 = 5432
 // carries only plain, serializable values - no tracer, hooks, or other runtime
 // dependencies (those are passed to [Make] as [Option] values).
 //
-// The struct tags let a loader fill it: `koanf` fields come from the file, `env`
-// fields from the environment (see confmaker/confx). Every open field supports
-// both sources: the file sets a value and the environment can override it.
-// Password is env-only (`koanf:"-"`), so putting it in the file is rejected as an
-// unknown key. The tags are inert strings, so the Config type itself depends only
-// on the standard-library-only github.com/uchaloop/secret/v2 module.
+// The `env` tags let a loader fill it from the environment (see
+// confmaker/confx). They are inert strings, so the Config type itself depends
+// only on the standard-library-only github.com/uchaloop/secret/v2 module.
 //
-// Host and Database are required. User and Password are optional: when empty they
-// fall back to libpq's defaults (PGUSER / the OS user, and PGPASSWORD / .pgpass).
+// Host and Database must be supplied by the deployment. User and Password are
+// optional: when empty they fall back to libpq's defaults (PGUSER / the OS user,
+// and PGPASSWORD / .pgpass).
 type Config struct {
 	// Host is the endpoint as "host" or "host:port". A port in the string wins;
 	// when omitted, 5432 applies. IPv6 with a port must be bracketed
 	// ("[::1]:5433").
-	Host string `koanf:"host" env:"HOST"`
-	// Database is the required PostgreSQL database name.
-	Database string `koanf:"database" env:"DATABASE"`
+	Host string `env:"HOST,notEmpty"`
+	// Database is the PostgreSQL database name.
+	Database string `env:"DATABASE,notEmpty"`
 	// User is the PostgreSQL role. When empty, libpq selects its default.
-	User string `koanf:"user" env:"USER"`
+	User string `env:"USER"`
 	// Password is read from the environment only. When empty, libpq may use
 	// PGPASSWORD or .pgpass.
-	Password secret.Secret `koanf:"-" env:"PASSWORD"`
+	Password secret.Secret `env:"PASSWORD"`
 	// AppName is reported as application_name in pg_stat_activity.
-	AppName string `koanf:"app_name" env:"APP_NAME"`
+	AppName string `env:"APP_NAME"`
 
 	// TLS configures libpq transport security.
-	TLS TLSConfig `koanf:"tls" envPrefix:"TLS_"`
+	TLS TLSConfig `envPrefix:"TLS_"`
 	// Pool configures pgxpool sizing and connection lifetimes.
-	Pool PoolConfig `koanf:"pool" envPrefix:"POOL_"`
+	Pool PoolConfig `envPrefix:"POOL_"`
 	// Timeouts configures connection timeouts.
-	Timeouts TimeoutConfig `koanf:"timeouts" envPrefix:"TIMEOUTS_"`
+	Timeouts TimeoutConfig `envPrefix:"TIMEOUTS_"`
 }
 
 // TLSConfig holds the libpq TLS settings.
@@ -59,50 +57,55 @@ type TLSConfig struct {
 	// SECURITY: "prefer"/"allow" fall back to unencrypted and never verify the
 	// server certificate; "require" encrypts but still does not verify it. Use
 	// "verify-full" with RootCert for MITM protection.
-	Mode string `koanf:"mode" env:"MODE"`
+	Mode string `env:"MODE"`
 	// Cert is the path to the client certificate.
-	Cert string `koanf:"cert" env:"CERT"`
+	Cert string `env:"CERT"`
 	// Key is the path to the client private key.
-	Key string `koanf:"key" env:"KEY"`
+	Key string `env:"KEY"`
 	// RootCert is the path to the trusted root certificate.
-	RootCert string `koanf:"root_cert" env:"ROOT_CERT"`
+	RootCert string `env:"ROOT_CERT"`
 	// ServerName overrides the TLS server name used for verification.
-	ServerName string `koanf:"server_name" env:"SERVER_NAME"`
+	ServerName string `env:"SERVER_NAME"`
 }
 
 // PoolConfig holds pgxpool sizing and connection-lifecycle settings. Zero values
 // leave the pgxpool defaults in place.
 type PoolConfig struct {
 	// MaxConns is the maximum pool size.
-	MaxConns int32 `koanf:"max_conns" env:"MAX_CONNS"`
+	MaxConns int32 `env:"MAX_CONNS"`
 	// MinConns is the minimum number of connections maintained by the pool.
-	MinConns int32 `koanf:"min_conns" env:"MIN_CONNS"`
+	MinConns int32 `env:"MIN_CONNS"`
 	// MinIdleConns is the minimum number of idle connections maintained by the
 	// pool.
-	MinIdleConns int32 `koanf:"min_idle_conns" env:"MIN_IDLE_CONNS"`
+	MinIdleConns int32 `env:"MIN_IDLE_CONNS"`
 	// MaxConnLifetime is the maximum lifetime of a connection.
-	MaxConnLifetime time.Duration `koanf:"max_conn_lifetime" env:"MAX_CONN_LIFETIME"`
+	MaxConnLifetime time.Duration `env:"MAX_CONN_LIFETIME"`
 	// MaxConnLifetimeJitter randomizes connection expiry to avoid synchronized
 	// reconnects.
-	MaxConnLifetimeJitter time.Duration `koanf:"max_conn_lifetime_jitter" env:"MAX_CONN_LIFETIME_JITTER"`
+	MaxConnLifetimeJitter time.Duration `env:"MAX_CONN_LIFETIME_JITTER"`
 	// MaxConnIdleTime is the maximum time a connection may remain idle.
-	MaxConnIdleTime time.Duration `koanf:"max_conn_idle_time" env:"MAX_CONN_IDLE_TIME"`
+	MaxConnIdleTime time.Duration `env:"MAX_CONN_IDLE_TIME"`
 	// HealthPeriod controls how often pgxpool checks idle connections.
-	HealthPeriod time.Duration `koanf:"health_period" env:"HEALTH_PERIOD"`
+	HealthPeriod time.Duration `env:"HEALTH_PERIOD"`
 }
 
 // TimeoutConfig holds connection timeouts.
 type TimeoutConfig struct {
 	// Connect bounds establishing a single connection. Zero leaves the pgx
 	// default.
-	Connect time.Duration `koanf:"connect" env:"CONNECT"`
+	Connect time.Duration `env:"CONNECT"`
 }
 
-// Validate checks the connection's own invariants. It returns every problem at
-// once, not just the first.
+// Validate checks what the values mean, once a loader has supplied them: every
+// problem at once, not just the first, so a misconfigured deployment takes one
+// rollout to fix rather than one per mistake.
 func (cfg Config) Validate() error {
 	var errs []error
 
+	// These overlap the notEmpty tags on purpose. A tag speaks to a deployment -
+	// it names the variable and fires before anything is built - while this
+	// speaks to any caller, including one that builds a Config in Go and never
+	// goes near a loader.
 	if len(strings.TrimSpace(cfg.Host)) == 0 {
 		errs = append(errs, errors.New("host is required"))
 	} else if _, _, err := resolveEndpoint(cfg.Host); err != nil {
