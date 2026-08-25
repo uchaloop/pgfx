@@ -5,7 +5,22 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-25
+
+### Changed
+
+- `Host` and `Database` declare `notEmpty` instead of being checked in
+  `Validate`. Whether a variable was supplied is the loader's question - only it
+  tells an unset variable from an empty one, and only it knows the variable's
+  name, since the prefix belongs to the application rather than to this module.
+  `Validate` keeps what the values mean: that a host parses as an endpoint, that
+  a pool size is not negative, that a minimum does not exceed its maximum.
+
+### Removed
+
+- The `koanf` struct tags and `config.example.toml`. Configuration is read from
+  the environment only; `confx.Manifest[pgfx.Config]("postgres")` lists every
+  variable a connection reads, which the example file used to do by hand.
 
 ## [0.2.1] - 2026-08-06
 
@@ -65,7 +80,8 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/uchaloop/pgfx/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/uchaloop/pgfx/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/uchaloop/pgfx/releases/tag/v0.2.0
 [0.1.1]: https://github.com/uchaloop/pgfx/releases/tag/v0.1.1
