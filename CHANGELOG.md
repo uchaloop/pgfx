@@ -7,6 +7,21 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `Host` and `Database` declare `notEmpty` instead of being checked in
+  `Validate`. Whether a variable was supplied is the loader's question - only it
+  tells an unset variable from an empty one, and only it knows the variable's
+  name, since the prefix belongs to the application rather than to this module.
+  `Validate` keeps what the values mean: that a host parses as an endpoint, that
+  a pool size is not negative, that a minimum does not exceed its maximum.
+
+### Removed
+
+- The `koanf` struct tags and `config.example.toml`. Configuration is read from
+  the environment only; `confx.Manifest[pgfx.Config]("postgres")` lists every
+  variable a connection reads, which the example file used to do by hand.
+
 ## [0.2.1] - 2026-08-06
 
 ### Changed

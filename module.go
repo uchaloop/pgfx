@@ -18,8 +18,8 @@ import (
 // source itself - typically with confmaker/confx:
 //
 //	fx.New(
-//		confx.LoadModule("config/local.toml"),
-//		confx.ProvideDefault[pgfx.Config]("postgres"),
+//		confx.Module(),
+//		confx.Provide[pgfx.Config]("postgres"),
 //		pgfx.Module,
 //	)
 //
