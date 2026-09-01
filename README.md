@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/github/license/uchaloop/pgfx)](LICENSE)
 
 A thin, Fx-first layer over [pgx](https://github.com/jackc/pgx) for Postgres: a
-`*pgxpool.Pool` built from a plain config, generic query helpers, transactions,
-tracing and lifecycle.
+connection built from a plain config, with generic query methods, tracing and
+lifecycle.
 
 - **Config is data, runtime is options** - what survives a round trip through
   text is `Config`; a tracer, a metrics callback, an in-memory `*tls.Config` are
@@ -14,8 +14,8 @@ tracing and lifecycle.
 - **It reads no config source** - the application supplies the `Config`, so pgfx
   is tied to no particular loader.
 - **A bad endpoint fails the start**, not the first query.
-- **Helpers that work anywhere** - the same call inside a transaction and
-  outside one.
+- **No second query API** - `DB` and `Tx` add typed fetches while preserving pgx
+  for execution, transactions and advanced operations.
 
 ```bash
 go get github.com/uchaloop/pgfx
@@ -28,7 +28,7 @@ fx.New(
 	confx.Module(),
 	confx.Provide[pgfx.Config]("postgres"),
 
-	pgfx.Module,          // untagged *pgxpool.Pool, verified at start, closed at stop
+	pgfx.Module,          // untagged *pgfx.DB, verified at start, closed at stop
 )
 ```
 
@@ -40,29 +40,56 @@ confx.ProvideNamed[pgfx.Config]("replica"),   // REPLICA_HOST, REPLICA_DATABASE,
 pgfx.ModuleFor("replica"),
 ```
 
-Without Fx: `pool, err := pgfx.Make(ctx, cfg)`.
+Without Fx: `db, err := pgfx.Make(ctx, cfg)`.
+
+Fx provides only `*pgfx.DB`; the embedded pool is available as `db.Pool` and is
+not registered separately.
 
 ## Queries
 
 ```go
-order, err := pgfx.FetchRow[Order](
-	ctx, pool,
+order, err := db.FetchRow[Order](
+	ctx,
 	`SELECT id, amount FROM orders WHERE id = $1`, id,
 )
 
-err := pgfx.Tx(ctx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-	_, err := pgfx.FetchValue[int64](
-		ctx, tx,
-		`INSERT INTO orders (amount) VALUES ($1) RETURNING id`, amount,
-	)
+total, err := db.FetchValue[int64](ctx, `SELECT count(*) FROM orders`)
+```
 
+```go
+tag, err := db.Exec(ctx, `UPDATE orders SET status = $1 WHERE id = $2`, status, id)
+```
+
+`FetchRows` and `FetchRow` decode struct rows by the `db:"..."` tag;
+`FetchValues` and `FetchValue` decode a single column into a scalar. The type to
+decode into is an explicit type argument, because nothing in the arguments
+implies it.
+
+## Transactions
+
+`Transaction` commits on nil and rolls back on an error or panic. Its `Tx` has
+the same typed fetches as `DB` and embeds the native `pgx.Tx` API:
+
+```go
+err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
+	order, err := tx.FetchRow[Order](ctx, selectOrder, id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, updateOrder, order.ID)
 	return err
 })
 ```
 
-`FetchRows`, `FetchRow`, `FetchValues` and `FetchValue` take a pool, a
-connection or a transaction. `Tx` commits on a nil error and rolls back on
-anything else.
+Use `tx`, not `db`, inside the callback: a call through `db` uses the pool and
+does not participate in the transaction.
+
+For manual ownership use the embedded native `db.Begin` or `db.BeginTx`; they
+return `pgx.Tx`. `tx.BeginNested` and `tx.Transaction` create typed pgx
+savepoints. The embedded pool also makes COPY, LISTEN, acquired connections and
+the rest of the native API available directly on `DB`; the pool itself is
+`db.Pool`.
 
 ## What a deployment sets
 

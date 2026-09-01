@@ -6,7 +6,7 @@ require (
 	github.com/exaring/otelpgx v0.11.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/uchaloop/secret/v2 v2.0.2
-	github.com/uchaloop/utilfx v0.1.0
+	github.com/uchaloop/utilfx v0.2.0
 	github.com/uchaloop/validate v0.1.0
 	go.opentelemetry.io/otel/trace v1.45.0
 	go.uber.org/fx v1.24.0

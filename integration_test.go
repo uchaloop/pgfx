@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uchaloop/secret/v2"
 	"go.uber.org/fx"
 )
@@ -26,17 +25,19 @@ func TestPostgresIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	pool, err := Make(ctx, cfg)
+	db, err := Make(ctx, cfg)
 	if err != nil {
 		t.Fatalf("Make: %v", err)
 	}
+
+	pool := db.Pool
 	t.Cleanup(pool.Close)
 
 	if err := pool.Ping(ctx); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
 
-	one, err := FetchValue[int](ctx, pool, "select 1")
+	one, err := db.FetchValue[int](ctx, "select 1")
 	if err != nil {
 		t.Fatalf("FetchValue: %v", err)
 	}
@@ -60,17 +61,28 @@ func TestPostgresIntegration(t *testing.T) {
 		t.Fatalf("create table: %v", err)
 	}
 
-	if err := Tx(ctx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	if err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *Tx) error {
 		_, err := tx.Exec(ctx, "insert into "+table+" (id) values (1)")
+		if err != nil {
+			return err
+		}
 
-		return err
+		count, err := tx.FetchValue[int64](ctx, "select count(*) from "+table)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return errors.New("insert is not visible inside transaction")
+		}
+
+		return nil
 	}); err != nil {
 		t.Fatalf("committed Tx: %v", err)
 	}
-	requireIntegrationCount(t, ctx, pool, table, 1)
+	requireIntegrationCount(t, ctx, db, table, 1)
 
 	wantRollback := errors.New("rollback requested")
-	err = Tx(ctx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = db.Transaction(ctx, pgx.TxOptions{}, func(tx *Tx) error {
 		if _, execErr := tx.Exec(ctx, "insert into "+table+" (id) values (2)"); execErr != nil {
 			return execErr
 		}
@@ -80,7 +92,7 @@ func TestPostgresIntegration(t *testing.T) {
 	if !errors.Is(err, wantRollback) {
 		t.Fatalf("rolled-back Tx error = %v, want %v", err, wantRollback)
 	}
-	requireIntegrationCount(t, ctx, pool, table, 1)
+	requireIntegrationCount(t, ctx, db, table, 1)
 }
 
 func TestFxLifecycleIntegration(t *testing.T) {
@@ -89,12 +101,12 @@ func TestFxLifecycleIntegration(t *testing.T) {
 		t.Skip("PGFX_TEST_HOST is not set")
 	}
 
-	var pool *pgxpool.Pool
+	var pool *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(integrationConfig(host, 5*time.Second)),
 		Module,
-		fx.Invoke(func(got *pgxpool.Pool) { pool = got }),
+		fx.Invoke(func(got *DB) { pool = got }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("build Fx app: %v", err)
@@ -132,12 +144,12 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 		Timeouts: TimeoutConfig{Connect: 200 * time.Millisecond},
 	}
 
-	var pool *pgxpool.Pool
+	var pool *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
 		Module,
-		fx.Invoke(func(got *pgxpool.Pool) { pool = got }),
+		fx.Invoke(func(got *DB) { pool = got }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("build Fx app: %v", err)
@@ -158,13 +170,13 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 func requireIntegrationCount(
 	t *testing.T,
 	ctx context.Context,
-	q Querier,
+	db *DB,
 	table string,
 	want int64,
 ) {
 	t.Helper()
 
-	got, err := FetchValue[int64](ctx, q, "select count(*) from "+table)
+	got, err := db.FetchValue[int64](ctx, "select count(*) from "+table)
 	if err != nil {
 		t.Fatalf("count rows: %v", err)
 	}

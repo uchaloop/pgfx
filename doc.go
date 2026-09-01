@@ -1,9 +1,7 @@
 /*
 Package pgfx is a thin, Fx-first layer over pgx/pgxpool for Postgres. A pgfx
-connection is a single *pgxpool.Pool built from a plain, serializable [Config],
-with generic helpers for the two things every query does - read rows, read one
-value - and a transaction that commits or rolls back on the error its callback
-returns.
+connection is a [DB]: a pool built from a plain, serializable [Config], carrying
+generic methods for the two things every query does - read rows, read one value.
 
 # Config and Option
 
@@ -27,9 +25,10 @@ default, so a deployment sets what it means to change and nothing else.
 
 # Wiring
 
-[Module] provides an untagged *pgxpool.Pool - the single default connection. It
-verifies the connection while the application starts, so a bad endpoint fails
-the start rather than the first query, and closes the pool on shutdown.
+[Module] provides an untagged *[DB] - the single default connection. It verifies
+the connection while the application starts, so a bad endpoint fails the start
+rather than the first query, and closes the pool on shutdown. Fx receives and
+provides only *DB; the embedded *pgxpool.Pool is not registered separately.
 
 [ModuleFor] adds a replica or a shard under a name, which gives both the Fx tag
 and the environment prefix:
@@ -49,22 +48,93 @@ borrowed the primary's credentials would be the kind of thing noticed in
 production.
 
 Several databases are several named connections; there is no other mechanism.
-Without Fx, [Make] builds a pool from a Config filled by hand.
+Without Fx, [Make] builds a DB from a Config filled by hand.
 
-# Queries and transactions
+# Queries
 
-[FetchRows], [FetchRow], [FetchValues] and [FetchValue] take a pool, a
-connection or a transaction - anything that can run a query - so a helper reads
-the same inside a transaction as outside one:
+FetchRow and FetchRows decode structs by `db` tag or field name:
 
-	order, err := pgfx.FetchRow[Order](
-		ctx, pool,
+	order, err := db.FetchRow[Order](
+		ctx,
 		`SELECT id, amount FROM orders WHERE id = $1`, id,
 	)
 
-[Tx] runs a callback in a transaction and decides by its error: nil commits,
-anything else rolls back. The decision is not the callback's to make and not the
-caller's to forget.
+	orders, err := db.FetchRows[Order](
+		ctx,
+		`SELECT id, amount FROM orders ORDER BY id`,
+	)
+
+FetchValue and FetchValues decode one column:
+
+	total, err := db.FetchValue[int64](ctx, `SELECT count(*) FROM orders`)
+
+	ids, err := db.FetchValues[int64](
+		ctx,
+		`SELECT id FROM orders ORDER BY id`,
+	)
+
+The singular methods require exactly one row and report pgx.ErrNoRows or
+pgx.ErrTooManyRows otherwise. pgx.ErrNoRows wraps sql.ErrNoRows, so errors.Is
+matches either sentinel.
+
+DB embeds *pgxpool.Pool. Native methods such as Exec, Query, CopyFrom, Acquire,
+and Close are therefore available directly:
+
+	tag, err := db.Exec(
+		ctx,
+		`UPDATE orders SET status = $1 WHERE id = $2`,
+		"paid", id,
+	)
+
+Use FetchValue rather than Exec for INSERT ... RETURNING.
+
+# Transactions
+
+[DB.Transaction] is the typed transaction entry point. It commits when its
+callback returns nil and rolls back on an error or panic. The callback receives
+a [Tx] with the same Fetch methods as DB and the embedded native pgx.Tx API:
+
+	err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
+		order, err := tx.FetchRow[Order](ctx, selectOrder, id)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, updateOrder, order.ID)
+		return err
+	})
+
+Inside the callback, use tx rather than db. A call through db uses the pool and
+does not participate in the transaction.
+
+The embedded pool's Begin and BeginTx remain the native manual API and return
+pgx.Tx:
+
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel: pgx.Serializable,
+	})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, insertOrder); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+
+[Tx.Transaction] creates a typed savepoint:
+
+	err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
+		return tx.Transaction(ctx, func(nested *pgfx.Tx) error {
+			_, err := nested.Exec(ctx, insertOptionalData)
+			return err
+		})
+	})
+
+DB embeds *pgxpool.Pool, so COPY, LISTEN, acquired connections and the rest of
+the native pool API are available directly. The pool itself is the DB.Pool
+field; no accessor is needed.
 
 # TLS
 
