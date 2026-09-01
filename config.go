@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uchaloop/secret/v2"
+	"github.com/uchaloop/validate"
 )
 
 // defaultPostgresPort is the port used when an endpoint omits one.
@@ -100,39 +101,33 @@ type TimeoutConfig struct {
 // problem at once, not just the first, so a misconfigured deployment takes one
 // rollout to fix rather than one per mistake.
 func (cfg Config) Validate() error {
-	var errs []error
+	var errs validate.Errors
 
 	// These overlap the notEmpty tags on purpose. A tag speaks to a deployment -
 	// it names the variable and fires before anything is built - while this
 	// speaks to any caller, including one that builds a Config in Go and never
 	// goes near a loader.
 	if len(strings.TrimSpace(cfg.Host)) == 0 {
-		errs = append(errs, errors.New("host is required"))
+		errs.Addf("host is required")
 	} else if _, _, err := resolveEndpoint(cfg.Host); err != nil {
-		errs = append(errs, fmt.Errorf("invalid host: %w", err))
+		errs.Addf("invalid host: %w", err)
 	}
-	if len(cfg.Database) == 0 {
-		errs = append(errs, errors.New("database is required"))
-	}
+
+	errs.Require(len(cfg.Database) != 0, "database is required")
 	// User and Password are optional: when empty they fall back to libpq's
 	// defaults (PGUSER / the OS user, and PGPASSWORD / .pgpass), so peer auth and
 	// passwordless connections work. See poolConfig, which only overrides them
 	// when set.
 
-	if cfg.Pool.MaxConns < 0 {
-		errs = append(errs, errors.New("pool.max_conns must not be negative"))
-	}
-	if cfg.Pool.MinConns < 0 {
-		errs = append(errs, errors.New("pool.min_conns must not be negative"))
-	}
-	if cfg.Pool.MaxConns > 0 && cfg.Pool.MinConns > cfg.Pool.MaxConns {
-		errs = append(errs, errors.New("pool.min_conns must not exceed pool.max_conns"))
-	}
-	if cfg.Timeouts.Connect < 0 {
-		errs = append(errs, errors.New("timeouts.connect must not be negative"))
-	}
+	errs.Require(cfg.Pool.MaxConns >= 0, "pool.max_conns must not be negative")
+	errs.Require(cfg.Pool.MinConns >= 0, "pool.min_conns must not be negative")
+	errs.Require(
+		cfg.Pool.MaxConns <= 0 || cfg.Pool.MinConns <= cfg.Pool.MaxConns,
+		"pool.min_conns must not exceed pool.max_conns",
+	)
+	errs.Require(cfg.Timeouts.Connect >= 0, "timeouts.connect must not be negative")
 
-	return errors.Join(errs...)
+	return errs.Err()
 }
 
 // resolveEndpoint parses a "host" or "host:port" endpoint. A port in the string

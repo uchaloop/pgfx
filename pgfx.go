@@ -1,15 +1,3 @@
-// Package pgfx is a thin, Fx-first layer over pgx/pgxpool for Postgres. A pgfx
-// connection is a single *pgxpool.Pool built from a plain, serializable Config.
-// Runtime dependencies (tracer, query metrics, pool hooks, an in-memory
-// *tls.Config) are supplied through [Option] values, never through [Config].
-//
-// pgfx is meant to be wired with Uber Fx. [Module] is the default single
-// connection and [ModuleFor] adds a replica or another shard; both consume a
-// pgfx.Config the application supplies (typically via confmaker/confx) and manage
-// the pool's lifecycle. pgfx does not read any config source itself, so it stays
-// decoupled from confmaker. Multiple databases are simply multiple named
-// connections. To build a pool without Fx, call [Make] with a Config you fill
-// yourself.
 package pgfx
 
 import (

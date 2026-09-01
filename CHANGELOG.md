@@ -5,6 +5,19 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-01
+
+### Changed
+
+- The package documentation carries the config fields, the options and the
+  wiring, with the reasons behind them; the README is a landing page. The package
+  comment moved from `pgfx.go` into `doc.go`.
+- `Config.Validate` accumulates through `github.com/uchaloop/validate` instead of
+  a hand-rolled slice and `errors.Join`. The messages and their order are
+  unchanged.
+- The module is built with Go 1.27, which the new dependency requires. A module
+  that depends on this one has to declare 1.27 as well.
+
 ## [0.3.0] - 2026-08-25
 
 ### Changed
