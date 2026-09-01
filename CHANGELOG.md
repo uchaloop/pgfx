@@ -5,6 +5,33 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-01
+
+### Changed
+
+- `Module`, `ModuleFor`, and `Make` now return `*DB` instead of
+  `*pgxpool.Pool`.
+- `FetchRows`, `FetchRow`, `FetchValues`, and `FetchValue` are Go 1.27 generic
+  methods on `DB` and `Tx`, replacing the package-level helpers.
+- `DB` embeds `*pgxpool.Pool` and `Tx` embeds `pgx.Tx`; the native pgx API stays
+  available without forwarding methods.
+
+### Added
+
+- `DB.Transaction` supplies a typed `*Tx`, committing on nil and rolling back on
+  error or panic.
+- `Tx.Transaction` and `Tx.BeginNested` provide typed pgx savepoints.
+
+### Fixed
+
+- No-row errors are returned unchanged from pgx, preserving `errors.Is` matches
+  for both `pgx.ErrNoRows` and `sql.ErrNoRows`.
+
+### Removed
+
+- The exported `Querier` and `TxBeginner` interfaces.
+- The package-level `Fetch*` and `Tx` functions.
+
 ## [0.4.0] - 2026-09-01
 
 ### Changed

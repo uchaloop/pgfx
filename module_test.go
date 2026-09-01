@@ -3,7 +3,6 @@ package pgfx
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 )
 
@@ -12,14 +11,14 @@ func validConfig() Config {
 }
 
 // TestModuleGraphValid verifies the default Module consumes an untagged Config
-// and provides an untagged *pgxpool.Pool. ValidateApp checks the graph without
+// and provides an untagged *DB. ValidateApp checks the graph without
 // running constructors, so no database is opened.
 func TestModuleGraphValid(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
 		fx.Supply(validConfig()),
 		Module,
-		fx.Invoke(func(*pgxpool.Pool) {}),
+		fx.Invoke(func(*DB) {}),
 	)
 	if err != nil {
 		t.Fatalf("ValidateApp: %v", err)
@@ -27,14 +26,14 @@ func TestModuleGraphValid(t *testing.T) {
 }
 
 // TestModuleForGraphValid verifies ModuleFor consumes a Config tagged
-// name:"<name>" and provides a *pgxpool.Pool tagged the same.
+// name:"<name>" and provides a *DB tagged the same.
 func TestModuleForGraphValid(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
 		fx.Supply(fx.Annotate(validConfig(), fx.ResultTags(`name:"replica"`))),
 		ModuleFor("replica"),
 		fx.Invoke(fx.Annotate(
-			func(*pgxpool.Pool) {},
+			func(*DB) {},
 			fx.ParamTags(`name:"replica"`),
 		)),
 	)
@@ -56,7 +55,7 @@ func TestMultiplePoolsGraphNoConflict(t *testing.T) {
 		ModuleFor("replica"),
 		ModuleFor("analytics"),
 		fx.Invoke(fx.Annotate(
-			func(primary, replica, analytics *pgxpool.Pool) {},
+			func(primary, replica, analytics *DB) {},
 			fx.ParamTags(``, `name:"replica"`, `name:"analytics"`),
 		)),
 	)
@@ -72,7 +71,7 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 	primaryCfg := Config{Host: "primary:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 	replicaCfg := Config{Host: "replica:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 
-	var primary, replica *pgxpool.Pool
+	var primary, replica *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(primaryCfg),
@@ -80,7 +79,7 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 		Module,
 		ModuleFor("replica"),
 		fx.Invoke(fx.Annotate(
-			func(p, r *pgxpool.Pool) { primary, replica = p, r },
+			func(p, r *DB) { primary, replica = p, r },
 			fx.ParamTags(``, `name:"replica"`),
 		)),
 	)
@@ -115,12 +114,12 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 func TestModuleBuildsWithoutPassword(t *testing.T) {
 	cfg := Config{Host: "h", Database: "app", TLS: TLSConfig{Mode: "disable"}} // no password
 
-	var pool *pgxpool.Pool
+	var pool *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
 		Module,
-		fx.Invoke(func(p *pgxpool.Pool) { pool = p }),
+		fx.Invoke(func(p *DB) { pool = p }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("passwordless build: %v", err)
@@ -135,7 +134,7 @@ func TestModuleRequiresConfig(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
 		Module,
-		fx.Invoke(func(*pgxpool.Pool) {}),
+		fx.Invoke(func(*DB) {}),
 	)
 	if err == nil {
 		t.Fatal("expected ValidateApp to fail without a Config")

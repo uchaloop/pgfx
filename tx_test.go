@@ -3,141 +3,147 @@ package pgfx
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 )
 
-type fakeTxBeginner struct {
-	tx   pgx.Tx
-	err  error
-	opts pgx.TxOptions
-}
+var _ pgx.Tx = (*Tx)(nil)
 
-func (db *fakeTxBeginner) BeginTx(
-	_ context.Context,
-	opts pgx.TxOptions,
-) (pgx.Tx, error) {
-	db.opts = opts
-
-	return db.tx, db.err
-}
-
-type fakeTx struct {
+type fakeNativeTx struct {
 	pgx.Tx
-	commitErr     error
-	rollbackErr   error
+	rows          pgx.Rows
+	queryErr      error
+	nested        pgx.Tx
+	beginErr      error
+	beginCalls    int
 	commitCalls   int
 	rollbackCalls int
+	closed        bool
 }
 
-func (tx *fakeTx) Commit(context.Context) error {
+func (tx *fakeNativeTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return tx.rows, tx.queryErr
+}
+
+func (tx *fakeNativeTx) Begin(context.Context) (pgx.Tx, error) {
+	tx.beginCalls++
+
+	return tx.nested, tx.beginErr
+}
+
+func (tx *fakeNativeTx) Commit(context.Context) error {
+	if tx.closed {
+		return pgx.ErrTxClosed
+	}
+
+	tx.closed = true
 	tx.commitCalls++
 
-	return tx.commitErr
+	return nil
 }
 
-func (tx *fakeTx) Rollback(context.Context) error {
+func (tx *fakeNativeTx) Rollback(context.Context) error {
+	if tx.closed {
+		return pgx.ErrTxClosed
+	}
+
+	tx.closed = true
 	tx.rollbackCalls++
 
-	return tx.rollbackErr
+	return nil
 }
 
-func TestTxCommitsSuccessfulCallback(t *testing.T) {
-	tx := &fakeTx{}
-	db := &fakeTxBeginner{tx: tx}
-	opts := pgx.TxOptions{IsoLevel: pgx.Serializable}
-	var received pgx.Tx
+func TestTxFetchValueUsesNativeTransaction(t *testing.T) {
+	native := &fakeNativeTx{
+		rows: newFakeRows([]string{"count"}, []any{int64(3)}),
+	}
 
-	err := Tx(context.Background(), db, opts, func(got pgx.Tx) error {
-		received = got
+	got, err := wrapTx(native).FetchValue[int64](context.Background(), "select")
+	if err != nil {
+		t.Fatalf("FetchValue: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("FetchValue = %d, want 3", got)
+	}
+}
+
+func TestTxTransactionCommitsNestedTransaction(t *testing.T) {
+	nested := &fakeNativeTx{}
+	root := wrapTx(&fakeNativeTx{nested: nested})
+	var received *Tx
+
+	err := root.Transaction(context.Background(), func(tx *Tx) error {
+		received = tx
 
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("Tx: %v", err)
+		t.Fatalf("Transaction: %v", err)
 	}
-	if received != tx {
-		t.Fatal("callback received a different transaction")
+	if received == nil || received.Tx != nested {
+		t.Fatal("callback did not receive the nested transaction wrapper")
 	}
-	if db.opts != opts {
-		t.Fatalf("BeginTx options = %#v, want %#v", db.opts, opts)
-	}
-	if tx.commitCalls != 1 || tx.rollbackCalls != 0 {
-		t.Fatalf("commit/rollback calls = %d/%d, want 1/0", tx.commitCalls, tx.rollbackCalls)
+	if nested.commitCalls != 1 || nested.rollbackCalls != 0 {
+		t.Fatalf(
+			"commit/rollback calls = %d/%d, want 1/0",
+			nested.commitCalls,
+			nested.rollbackCalls,
+		)
 	}
 }
 
-func TestTxRollsBackCallbackError(t *testing.T) {
-	tx := &fakeTx{}
-	db := &fakeTxBeginner{tx: tx}
+func TestTxTransactionRollsBackNestedTransaction(t *testing.T) {
+	nested := &fakeNativeTx{}
+	root := wrapTx(&fakeNativeTx{nested: nested})
 	want := errors.New("callback failed")
 
-	err := Tx(context.Background(), db, pgx.TxOptions{}, func(pgx.Tx) error {
-		return want
-	})
+	err := root.Transaction(context.Background(), func(*Tx) error { return want })
 	if !errors.Is(err, want) {
-		t.Fatalf("Tx error = %v, want %v", err, want)
+		t.Fatalf("Transaction error = %v, want %v", err, want)
 	}
-	if tx.commitCalls != 0 || tx.rollbackCalls != 1 {
-		t.Fatalf("commit/rollback calls = %d/%d, want 0/1", tx.commitCalls, tx.rollbackCalls)
-	}
-}
-
-func TestTxWrapsBeginError(t *testing.T) {
-	want := errors.New("begin failed")
-	db := &fakeTxBeginner{err: want}
-
-	err := Tx(context.Background(), db, pgx.TxOptions{}, func(pgx.Tx) error {
-		t.Fatal("callback called after BeginTx error")
-
-		return nil
-	})
-	if !errors.Is(err, want) || !strings.Contains(err.Error(), "begin tx") {
-		t.Fatalf("Tx error = %v, want wrapped begin error", err)
+	if nested.commitCalls != 0 || nested.rollbackCalls != 1 {
+		t.Fatalf(
+			"commit/rollback calls = %d/%d, want 0/1",
+			nested.commitCalls,
+			nested.rollbackCalls,
+		)
 	}
 }
 
-func TestTxWrapsCommitError(t *testing.T) {
-	want := errors.New("commit failed")
-	tx := &fakeTx{commitErr: want}
-
-	err := Tx(
-		context.Background(),
-		&fakeTxBeginner{tx: tx},
-		pgx.TxOptions{},
-		func(pgx.Tx) error { return nil },
-	)
-	if !errors.Is(err, want) || !strings.Contains(err.Error(), "commit tx") {
-		t.Fatalf("Tx error = %v, want wrapped commit error", err)
-	}
-	if tx.commitCalls != 1 || tx.rollbackCalls != 0 {
-		t.Fatalf("commit/rollback calls = %d/%d, want 1/0", tx.commitCalls, tx.rollbackCalls)
-	}
-}
-
-func TestTxRollsBackAndRepanics(t *testing.T) {
-	tx := &fakeTx{}
+func TestTxTransactionRollsBackAndRepanics(t *testing.T) {
+	nested := &fakeNativeTx{}
+	root := wrapTx(&fakeNativeTx{nested: nested})
 	const want = "panic value"
 
 	defer func() {
 		if got := recover(); got != want {
 			t.Fatalf("panic = %#v, want %#v", got, want)
 		}
-		if tx.commitCalls != 0 || tx.rollbackCalls != 1 {
+		if nested.commitCalls != 0 || nested.rollbackCalls != 1 {
 			t.Fatalf(
 				"commit/rollback calls = %d/%d, want 0/1",
-				tx.commitCalls,
-				tx.rollbackCalls,
+				nested.commitCalls,
+				nested.rollbackCalls,
 			)
 		}
 	}()
 
-	_ = Tx(
-		context.Background(),
-		&fakeTxBeginner{tx: tx},
-		pgx.TxOptions{},
-		func(pgx.Tx) error { panic(want) },
-	)
+	_ = root.Transaction(context.Background(), func(*Tx) error { panic(want) })
+}
+
+func TestTxBeginNestedWrapsNativeTransaction(t *testing.T) {
+	nested := &fakeNativeTx{}
+	native := &fakeNativeTx{nested: nested}
+
+	got, err := wrapTx(native).BeginNested(context.Background())
+	if err != nil {
+		t.Fatalf("BeginNested: %v", err)
+	}
+	if got.Tx != nested {
+		t.Fatal("BeginNested wrapped a different transaction")
+	}
+	if native.beginCalls != 1 {
+		t.Fatalf("Begin calls = %d, want 1", native.beginCalls)
+	}
 }

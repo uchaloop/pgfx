@@ -6,10 +6,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Make validates cfg and opens a connection pool for it, applying the runtime
-// opts. The caller owns the returned pool and must Close it (the fx module does
-// this via lifecycle).
-func Make(ctx context.Context, cfg Config, opts ...Option) (*pgxpool.Pool, error) {
+// Make validates cfg and opens a connection for it, applying the runtime opts.
+// The caller owns the returned DB and must call Close; the Fx module does that
+// through the lifecycle.
+func Make(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -24,5 +24,5 @@ func Make(ctx context.Context, cfg Config, opts ...Option) (*pgxpool.Pool, error
 		return nil, err
 	}
 
-	return pool, nil
+	return &DB{Pool: pool}, nil
 }

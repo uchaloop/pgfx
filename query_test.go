@@ -124,7 +124,7 @@ func (*fakeRows) Conn() *pgx.Conn {
 	return nil
 }
 
-func TestFetchRows(t *testing.T) {
+func TestCollectManyStructRows(t *testing.T) {
 	type order struct {
 		ID     int64 `db:"id"`
 		Amount int64 `db:"amount"`
@@ -136,72 +136,89 @@ func TestFetchRows(t *testing.T) {
 		[]any{int64(2), int64(200)},
 	)
 
-	got, err := FetchRows[order](context.Background(), fakeQuerier{rows: rows}, "select")
+	got, err := collectMany(
+		context.Background(),
+		fakeQuerier{rows: rows},
+		pgx.RowToStructByNameLax[order],
+		"select",
+	)
 	if err != nil {
-		t.Fatalf("FetchRows: %v", err)
+		t.Fatalf("collectMany: %v", err)
 	}
 	want := []order{{ID: 1, Amount: 100}, {ID: 2, Amount: 200}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("FetchRows = %#v, want %#v", got, want)
+		t.Fatalf("collectMany = %#v, want %#v", got, want)
 	}
 	if !rows.closed {
-		t.Fatal("FetchRows did not close rows")
+		t.Fatal("collectMany did not close rows")
 	}
 }
 
-func TestFetchRow(t *testing.T) {
+func TestCollectOneStructRow(t *testing.T) {
 	type order struct {
 		ID int64 `db:"id"`
 	}
 
 	rows := newFakeRows([]string{"id"}, []any{int64(7)})
-	got, err := FetchRow[order](context.Background(), fakeQuerier{rows: rows}, "select")
+	got, err := collectOne(
+		context.Background(),
+		fakeQuerier{rows: rows},
+		pgx.RowToStructByNameLax[order],
+		"select",
+	)
 	if err != nil {
-		t.Fatalf("FetchRow: %v", err)
+		t.Fatalf("collectOne: %v", err)
 	}
 	if got.ID != 7 {
-		t.Fatalf("FetchRow ID = %d, want 7", got.ID)
+		t.Fatalf("collectOne ID = %d, want 7", got.ID)
 	}
 	if !rows.closed {
-		t.Fatal("FetchRow did not close rows")
+		t.Fatal("collectOne did not close rows")
 	}
 }
 
-func TestFetchValues(t *testing.T) {
+func TestCollectManyValues(t *testing.T) {
 	rows := newFakeRows(
 		[]string{"id"},
 		[]any{int64(1)},
 		[]any{int64(2)},
 	)
-	got, err := FetchValues[int64](context.Background(), fakeQuerier{rows: rows}, "select")
+	got, err := collectMany(context.Background(), fakeQuerier{rows: rows}, pgx.RowTo[int64], "select")
 	if err != nil {
-		t.Fatalf("FetchValues: %v", err)
+		t.Fatalf("collectMany: %v", err)
 	}
 	if !reflect.DeepEqual(got, []int64{1, 2}) {
-		t.Fatalf("FetchValues = %v, want [1 2]", got)
+		t.Fatalf("collectMany = %v, want [1 2]", got)
 	}
 }
 
-func TestFetchValue(t *testing.T) {
+func TestCollectOneValue(t *testing.T) {
 	rows := newFakeRows([]string{"count"}, []any{int64(3)})
-	got, err := FetchValue[int64](context.Background(), fakeQuerier{rows: rows}, "select")
+	got, err := collectOne(context.Background(), fakeQuerier{rows: rows}, pgx.RowTo[int64], "select")
 	if err != nil {
-		t.Fatalf("FetchValue: %v", err)
+		t.Fatalf("collectOne: %v", err)
 	}
 	if got != 3 {
-		t.Fatalf("FetchValue = %d, want 3", got)
+		t.Fatalf("collectOne = %d, want 3", got)
 	}
 }
 
-func TestFetchOneErrors(t *testing.T) {
+func TestCollectOneErrors(t *testing.T) {
 	t.Run("no rows", func(t *testing.T) {
-		_, err := FetchValue[int64](
+		_, err := collectOne(
 			context.Background(),
 			fakeQuerier{rows: newFakeRows([]string{"id"})},
+			pgx.RowTo[int64],
 			"select",
 		)
+		// pgx.ErrNoRows wraps sql.ErrNoRows, so a caller matches whichever
+		// sentinel it already checks for. Both are pinned here: mapping one to
+		// the other would silently take the other away.
 		if !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("FetchValue error = %v, want sql.ErrNoRows", err)
+			t.Fatalf("collectOne error = %v, want sql.ErrNoRows", err)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("collectOne error = %v, want pgx.ErrNoRows", err)
 		}
 	})
 
@@ -211,35 +228,36 @@ func TestFetchOneErrors(t *testing.T) {
 			[]any{int64(1)},
 			[]any{int64(2)},
 		)
-		_, err := FetchValue[int64](context.Background(), fakeQuerier{rows: rows}, "select")
+		_, err := collectOne(context.Background(), fakeQuerier{rows: rows}, pgx.RowTo[int64], "select")
 		if !errors.Is(err, pgx.ErrTooManyRows) {
-			t.Fatalf("FetchValue error = %v, want pgx.ErrTooManyRows", err)
+			t.Fatalf("collectOne error = %v, want pgx.ErrTooManyRows", err)
 		}
 	})
 }
 
-func TestFetchPropagatesQueryError(t *testing.T) {
+func TestCollectPropagatesQueryError(t *testing.T) {
 	want := errors.New("query failed")
-	_, err := FetchValues[int64](
+	_, err := collectMany(
 		context.Background(),
 		fakeQuerier{err: want},
+		pgx.RowTo[int64],
 		"select",
 	)
 	if !errors.Is(err, want) {
-		t.Fatalf("FetchValues error = %v, want %v", err, want)
+		t.Fatalf("collectMany error = %v, want %v", err, want)
 	}
 }
 
-func TestFetchClosesRowsOnScanError(t *testing.T) {
+func TestCollectClosesRowsOnScanError(t *testing.T) {
 	want := errors.New("scan failed")
 	rows := newFakeRows([]string{"id"}, []any{int64(1)})
 	rows.scanErr = want
 
-	_, err := FetchValues[int64](context.Background(), fakeQuerier{rows: rows}, "select")
+	_, err := collectMany(context.Background(), fakeQuerier{rows: rows}, pgx.RowTo[int64], "select")
 	if !errors.Is(err, want) {
-		t.Fatalf("FetchValues error = %v, want %v", err, want)
+		t.Fatalf("collectMany error = %v, want %v", err, want)
 	}
 	if !rows.closed {
-		t.Fatal("FetchValues did not close rows after a scan error")
+		t.Fatal("collectMany did not close rows after a scan error")
 	}
 }

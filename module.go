@@ -4,15 +4,15 @@ import (
 	"context"
 
 	"github.com/exaring/otelpgx"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uchaloop/utilfx"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
 )
 
 // Module is an Fx module for the default Postgres connection: it consumes an
-// untagged pgfx.Config from the container and provides an untagged *pgxpool.Pool,
-// so a repository just depends on *pgxpool.Pool - no tags, no wrappers.
+// untagged pgfx.Config from the container and provides only an untagged *DB, so
+// a repository just depends on *DB - no tags, no wrappers. The pool embedded in
+// DB is not provided as a separate Fx value.
 //
 // The application supplies the Config explicitly - pgfx does not read any config
 // source itself - typically with confmaker/confx:
@@ -23,39 +23,39 @@ import (
 //		pgfx.Module,
 //	)
 //
-// The pool is pinged on start (fail-fast on a dead database) and closed on stop,
-// and takes an optional trace.TracerProvider and QueryMetricFunc from the
+// The connection is pinged on start (fail-fast on a dead database) and closed on
+// stop, and takes an optional trace.TracerProvider and QueryMetricFunc from the
 // container.
-var Module = fx.Module("pgfx", poolProvider(``))
+var Module = fx.Module("pgfx", connectionProvider(``))
 
 // ModuleFor is an Fx module for a named connection - a replica or another shard.
-// It consumes a pgfx.Config tagged name:"<name>" and provides a *pgxpool.Pool
-// tagged the same; a consumer selects it with fx.ParamTags. The application
-// supplies the tagged Config explicitly (typically confmaker/confx's Provide).
+// It consumes a pgfx.Config tagged name:"<name>" and provides only a *DB tagged
+// the same; a consumer selects it with fx.ParamTags. The application supplies
+// the tagged Config explicitly (typically confmaker/confx's Provide).
 func ModuleFor(name string) fx.Option {
-	return fx.Module("pgfx-"+name, poolProvider(utilfx.NameTag(name)))
+	return fx.Module("pgfx-"+name, connectionProvider(utilfx.NameTag(name)))
 }
 
-// poolProvider builds the annotated pool constructor for a connection whose
+// connectionProvider builds the annotated constructor for a connection whose
 // Config carries the given tag (empty for the untagged default).
-func poolProvider(tag string) fx.Option {
+func connectionProvider(tag string) fx.Option {
 	return fx.Provide(
 		fx.Annotate(
-			makePool,
+			makeConnection,
 			fx.ParamTags(tag, ``, `optional:"true"`, `optional:"true"`),
 			fx.ResultTags(tag),
 		),
 	)
 }
 
-// makePool builds a pool from the injected Config and optional runtime
+// makeConnection builds a DB from the injected Config and optional runtime
 // dependencies, and registers its lifecycle.
-func makePool(
+func makeConnection(
 	cfg Config,
 	lifecycle fx.Lifecycle,
 	tracerProvider trace.TracerProvider,
 	queryMetrics QueryMetricFunc,
-) (*pgxpool.Pool, error) {
+) (*DB, error) {
 	var opts []Option
 	// Tracing is opt-in: enable otelpgx spans only when a TracerProvider is
 	// supplied to the container.
@@ -66,21 +66,21 @@ func makePool(
 		opts = append(opts, WithQueryMetrics(queryMetrics))
 	}
 
-	pool, err := Make(context.Background(), cfg, opts...)
+	db, err := Make(context.Background(), cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			return pool.Ping(ctx)
+			return db.Ping(ctx)
 		},
 		OnStop: func(context.Context) error {
-			pool.Close()
+			db.Close()
 
 			return nil
 		},
 	})
 
-	return pool, nil
+	return db, nil
 }

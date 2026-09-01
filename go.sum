@@ -31,8 +31,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/uchaloop/secret/v2 v2.0.2 h1:3SqNlD46M0prgAfImWjUA8L0kTNsDGssAaacvVcVk1Y=
 github.com/uchaloop/secret/v2 v2.0.2/go.mod h1:6WSKO6ivz7Fh0nHfVhrkC1JAgCqP8fIU23wxQ5dS6+o=
-github.com/uchaloop/utilfx v0.1.0 h1:BSmmISHSZPtdssrgfae0Ib5oSFx6WBoSbBWX7qiJ3IU=
-github.com/uchaloop/utilfx v0.1.0/go.mod h1:+vCleJim1c/6PS5W7J4Hd8/84pE5VuIVm+KvJyMVlKE=
+github.com/uchaloop/utilfx v0.2.0 h1:BPPVIKvs52t1Bc0Syl+kmclxOyVadw+3fLbzYa493hE=
+github.com/uchaloop/utilfx v0.2.0/go.mod h1:NGIarHYhwzAtxbDGMJEVWNmfFJFomLmuuGbPHDpyuiA=
 github.com/uchaloop/validate v0.1.0 h1:lwcnFtHl0Kyviz1vTOTmBWj5Xu5j+NC8yoLUt/eSHY8=
 github.com/uchaloop/validate v0.1.0/go.mod h1:6GbN7UKDj1ascOcC1JpCIMmPXvDC62c8Hm0yT/2Osbk=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
