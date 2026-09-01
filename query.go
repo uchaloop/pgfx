@@ -6,16 +6,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// fetcher is the minimal surface needed by the fetch helpers. A pool, a
+// querier is the minimal surface needed by the fetch helpers. A pool, a
 // connection and a transaction all satisfy it.
-type fetcher interface {
+type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // collectMany runs the query on q and collects every row with scan.
 func collectMany[T any](
 	ctx context.Context,
-	q fetcher,
+	q querier,
 	scan pgx.RowToFunc[T],
 	sql string,
 	args ...any,
@@ -35,7 +35,7 @@ func collectMany[T any](
 // with the standard one would only take away the ability to match the pgx one.
 func collectOne[T any](
 	ctx context.Context,
-	q fetcher,
+	q querier,
 	scan pgx.RowToFunc[T],
 	sql string,
 	args ...any,
