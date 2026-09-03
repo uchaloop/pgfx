@@ -5,6 +5,21 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-03
+
+### Added
+
+- `QueryMetric.Kind` distinguishes queries, batches and COPY operations with
+  bounded `query`, `batch` and `copy_from` labels via `QueryKind.String`.
+- Batch metrics aggregate observed row counts and report one operation duration
+  and error. Opt-in SQL joins queued statements; COPY leaves SQL empty.
+
+### Fixed
+
+- `WithQueryMetrics` now observes native `SendBatch` and `CopyFrom` through pgx
+  hooks, including when composed with tracing. Duplicate batch end hooks report
+  only once. Early COPY failures without an end hook remain unobservable.
+
 ## [0.6.0] - 2026-09-03
 
 ### Added

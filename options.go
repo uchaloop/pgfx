@@ -83,8 +83,9 @@ func WithTracer(tracer pgx.QueryTracer) Option {
 	return func(o *options) { o.tracer = tracer }
 }
 
-// WithQueryMetrics installs a second pgx.QueryTracer that reports a QueryMetric
-// for every query (composed with the span tracer). nil disables it.
+// WithQueryMetrics reports query, batch and COPY metrics alongside any other
+// tracers. See QueryMetricFunc for callback requirements and coverage limits.
+// nil disables it.
 func WithQueryMetrics(fn QueryMetricFunc) Option {
 	return func(o *options) { o.queryMetrics = fn }
 }
