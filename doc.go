@@ -189,11 +189,13 @@ Under Fx, [Module] enables OpenTelemetry query spans by itself when a
 trace.TracerProvider is in the graph. [WithTracing] configures otelpgx directly,
 and [WithTracer] installs any pgx.QueryTracer.
 
-Query duration is reported through a callback rather than to a metrics library,
-so pgfx holds no opinion about where it goes:
+Query, batch and COPY metrics are reported through a callback rather than to a
+metrics library, so pgfx holds no opinion about where they go:
 
 	fx.Supply(pgfx.QueryMetricFunc(func(metric pgfx.QueryMetric) {
-		// metric.Name, metric.Duration, metric.Err
+		// Use metric.Name and metric.Kind.String() as bounded labels.
+		// Record metric.Duration, metric.RowsAffected and metric.Err.
+		// This callback must be concurrency-safe, cheap and non-blocking.
 	}))
 
 [WithQueryName] attaches a stable name to a query through the context, because
@@ -201,8 +203,35 @@ the SQL itself is not a metric label - it varies, and it is unbounded.
 
 	ctx = pgfx.WithQueryName(ctx, "orders.get_by_id")
 
-The SQL is left out of the metric by default. [WithSQLInQueryMetrics] includes
-it, for a system where a query text is not something to hand to a metrics
-pipeline by accident.
+Outside Fx, install the callback with [WithQueryMetrics]. A batch produces one
+observation, including results drained by Close:
+
+	batch := &pgx.Batch{}
+	batch.Queue("insert into orders (id) values ($1)", 1)
+	batch.Queue("insert into orders (id) values ($1)", 2)
+	results := db.SendBatch(pgfx.WithQueryName(ctx, "orders.sync"), batch)
+	if err := results.Close(); err != nil {
+		return err
+	}
+
+COPY is observed through the same callback with KindCopyFrom:
+
+	_, err := db.CopyFrom(pgfx.WithQueryName(ctx, "orders.load"),
+		pgx.Identifier{"orders"}, []string{"id"},
+		pgx.CopyFromRows([][]any{{int64(3)}, {int64(4)}}))
+
+Duration measures the pgx operation lifecycle, not server time or a pure round
+trip: it includes preparation, result consumption, delays before batch Close,
+and COPY source production, but excludes pool acquisition. Batch row counts sum
+observed command tags; they can be partial on error and do not imply a commit.
+
+Coverage follows pgx hooks. Empty batches and pool acquisition failures produce
+no metric. In pgx v5.10, early COPY statement-description errors also omit the
+end hook and are not reported. Always close batch results.
+
+SQL is omitted by default. [WithSQLInQueryMetrics] opts in to raw query text;
+batch statements are joined with "; " before rewriting, without interpolating
+arguments, and may include statements that never execute. COPY leaves SQL empty.
+Never use SQL as a label; scrub it before recording.
 */
 package pgfx
