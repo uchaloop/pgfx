@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/uchaloop/pgfx/page"
 )
 
 // Tx is a Postgres transaction with the same generic fetch methods as DB. It
@@ -43,6 +44,20 @@ func (t *Tx) FetchValues[T any](ctx context.Context, sql string, args ...any) ([
 // pgx.ErrTooManyRows when it yields more than one. For a struct use FetchRow.
 func (t *Tx) FetchValue[T any](ctx context.Context, sql string, args ...any) (T, error) {
 	return collectOne(ctx, t.Tx, pgx.RowTo[T], sql, args...)
+}
+
+// FetchPage runs a paginated query and decodes one page of struct rows into T,
+// with the number of rows the filter matches in total. It is [DB.FetchPage]
+// inside a transaction, where the rows and the count see one snapshot - under a
+// repeatable read isolation level, a total that cannot disagree with the page it
+// describes.
+func (t *Tx) FetchPage[T any](
+	ctx context.Context,
+	query page.Query,
+	req page.Request,
+	args ...any,
+) ([]T, uint, error) {
+	return collectPage[T](ctx, t.Tx, query, req, args)
 }
 
 // BeginNested starts a pseudo-nested transaction implemented by pgx with a

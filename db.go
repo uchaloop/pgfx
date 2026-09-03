@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uchaloop/pgfx/page"
 )
 
 // DB is a Postgres connection: a pool, and the queries bound to it. It is what
@@ -42,6 +43,25 @@ func (d *DB) FetchValues[T any](ctx context.Context, sql string, args ...any) ([
 // pgx.ErrTooManyRows when it yields more than one. For a struct use FetchRow.
 func (d *DB) FetchValue[T any](ctx context.Context, sql string, args ...any) (T, error) {
 	return collectOne(ctx, d.Pool, pgx.RowTo[T], sql, args...)
+}
+
+// FetchPage runs a paginated query and decodes one page of struct rows into T,
+// with the number of rows the filter matches in total. The page request carries
+// the page number, its size and the client's sort; the rest of the arguments are
+// the query's own, numbered from $1.
+//
+// The page is applied around the query - ORDER BY, LIMIT and OFFSET are wrapped
+// on the outside - so the query stays a plain SELECT and its columns decode by
+// the `db:"..."` tag as everywhere else. The total takes a second statement,
+// which is skipped whenever the returned rows already imply it. An empty page is
+// a valid result, not an error.
+func (d *DB) FetchPage[T any](
+	ctx context.Context,
+	query page.Query,
+	req page.Request,
+	args ...any,
+) ([]T, uint, error) {
+	return collectPage[T](ctx, d.Pool, query, req, args)
 }
 
 // Transaction runs fn in a transaction. A nil error commits; a non-nil error
