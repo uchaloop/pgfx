@@ -5,6 +5,25 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-03
+
+### Added
+
+- `DB.FetchPage` and `Tx.FetchPage` return one page of struct rows together
+  with the number of rows the filter matches in total.
+- Package `page` holds the vocabulary of a paginated query - `Request`,
+  `Query`, `Order`, `Cols` - and depends on nothing but the standard library,
+  so a handler or a domain interface can speak about pages without importing a
+  driver.
+- `page.Make` and `page.Must` bind a plain `SELECT` to its sort policy:
+  `Head` for a pinned leading order, the required `Tie` for the stabilizer,
+  `Sortable` to narrow the whitelist, `SortKeyTag` to take the client's field
+  names from another struct tag, and `CountSQL` to count over a cheaper
+  statement.
+- The count statement is reported to `QueryMetricFunc` under the caller's query
+  name with a `.count` suffix.
+- A logo in the README.
+
 ## [0.5.0] - 2026-09-01
 
 ### Changed
@@ -120,7 +139,10 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/uchaloop/pgfx/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/uchaloop/pgfx/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/uchaloop/pgfx/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/uchaloop/pgfx/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/uchaloop/pgfx/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/uchaloop/pgfx/releases/tag/v0.2.0

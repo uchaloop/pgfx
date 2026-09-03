@@ -1,8 +1,12 @@
-# pgfx
+<p align="center">
+  <img src="logo.png" alt="pgfx" width="320">
+</p>
 
-[![CI](https://github.com/uchaloop/pgfx/actions/workflows/ci.yml/badge.svg)](https://github.com/uchaloop/pgfx/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/uchaloop/pgfx.svg)](https://pkg.go.dev/github.com/uchaloop/pgfx)
-[![License: MIT](https://img.shields.io/github/license/uchaloop/pgfx)](LICENSE)
+<p align="center">
+  <a href="https://github.com/uchaloop/pgfx/actions/workflows/ci.yml"><img src="https://github.com/uchaloop/pgfx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pkg.go.dev/github.com/uchaloop/pgfx"><img src="https://pkg.go.dev/badge/github.com/uchaloop/pgfx.svg" alt="Go Reference"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/uchaloop/pgfx" alt="License: MIT"></a>
+</p>
 
 A thin, Fx-first layer over [pgx](https://github.com/jackc/pgx) for Postgres: a
 connection built from a plain config, with generic query methods, tracing and
@@ -64,6 +68,35 @@ tag, err := db.Exec(ctx, `UPDATE orders SET status = $1 WHERE id = $2`, status, 
 `FetchValues` and `FetchValue` decode a single column into a scalar. The type to
 decode into is an explicit type argument, because nothing in the arguments
 implies it.
+
+## Pagination
+
+`FetchPage` returns one page and the number of rows the filter matches. The
+query stays a plain `SELECT` - no `ORDER BY`, no `LIMIT`, no row numbers, no
+count - and the page is wrapped around it, so the filter is written once and the
+rows decode by the `db` tag like any other:
+
+```go
+var warehouses = page.Must(fetchWarehousesSQL,
+	page.Head(page.Desc("is_active")),   // pinned, before the client's sort
+	page.Tie(page.Asc("id")),            // required: a page needs a total order
+	page.SortKeyTag("json"),             // the client sorts by json names
+)
+
+rows, total, err := db.FetchPage[Warehouse](ctx, warehouses,
+	page.Request{Number: 2, Size: 20, Sort: []string{"cityEng:desc"}},
+	params.Country,
+)
+```
+
+Sortable fields are derived from the model, so they cannot drift away from the
+columns that are actually there, and an unknown one is an error rather than a
+silent skip. The total takes a second statement, skipped whenever the rows
+already imply it - a page shorter than it asked for is the last one.
+
+Page number and size arrive as a `page.Request`, apart from the filter: a
+default for a page a client did not fully specify belongs at the edge that
+parsed the request, and a zero here is a bug rather than a request for page one.
 
 ## Transactions
 

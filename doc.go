@@ -88,6 +88,46 @@ and Close are therefore available directly:
 
 Use FetchValue rather than Exec for INSERT ... RETURNING.
 
+# Pagination
+
+FetchPage returns one page of rows and how many rows the filter matches in
+total. The query stays a plain SELECT - no ORDER BY, no LIMIT, no row numbers,
+no count - and the page is applied around it, which is what keeps the filter
+written once and the rows decodable by the `db` tag like any other:
+
+	SELECT * FROM ( <query> ) AS pgfx_page ORDER BY ... LIMIT $n+1 OFFSET $n+2
+	SELECT count(*) FROM ( <query> ) AS pgfx_page
+
+The sort policy is bound once, next to the SQL; the page number, its size and
+the client's sort arrive per call, apart from the filter arguments:
+
+	query, err := page.Make(fetchWarehousesSQL,
+		page.Head(page.Desc("is_active")),
+		page.Tie(page.Asc("id")),
+		page.SortKeyTag("json"),
+	)
+
+	warehouses, total, err := db.FetchPage[Warehouse](ctx, query,
+		page.Request{Number: 2, Size: 20, Sort: []string{"cityEng:desc"}},
+		params.Country,
+	)
+
+The sortable fields are derived from the model, so they cannot drift away from
+the columns that are there; an unknown one is an error rather than a silent
+skip. [page.Tie] is required, because a page without a total order repeats rows
+on one page and loses them from another. The details - narrowing the whitelist,
+counting over a cheaper statement, NULL placement - are in the
+[github.com/uchaloop/pgfx/page] documentation.
+
+The second statement is skipped whenever the rows already imply the total: a
+page shorter than it asked for is the last one. When it does run, it is reported
+to the metrics under the caller's query name with a ".count" suffix - it is a
+different statement with a cost of its own, and it does not run every time.
+
+An empty page is a valid result, not an error. [Tx.FetchPage] runs both
+statements inside a transaction, where a repeatable read isolation level makes
+the total agree with the page it describes.
+
 # Transactions
 
 [DB.Transaction] is the typed transaction entry point. It commits when its
