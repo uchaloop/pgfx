@@ -15,11 +15,10 @@ import (
 // DB is not provided as a separate Fx value.
 //
 // The application supplies the Config explicitly - pgfx does not read any config
-// source itself - typically with confmaker/confx:
+// source itself:
 //
 //	fx.New(
-//		confx.Module(),
-//		confx.Provide[pgfx.Config]("postgres"),
+//		fx.Supply(pgfx.Config{Host: "localhost:5432", Database: "orders"}),
 //		pgfx.Module,
 //	)
 //
@@ -31,7 +30,7 @@ var Module = fx.Module("pgfx", connectionProvider(``))
 // ModuleFor is an Fx module for a named connection - a replica or another shard.
 // It consumes a pgfx.Config tagged name:"<name>" and provides only a *DB tagged
 // the same; a consumer selects it with fx.ParamTags. The application supplies
-// the tagged Config explicitly (typically confmaker/confx's Provide).
+// the tagged Config explicitly, for example with fx.Supply and fx.ResultTags.
 func ModuleFor(name string) fx.Option {
 	return fx.Module("pgfx-"+name, connectionProvider(utilfx.NameTag(name)))
 }

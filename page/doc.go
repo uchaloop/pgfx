@@ -5,7 +5,7 @@ and what a query is allowed to order by.
 It depends on nothing but the standard library, so the layers that speak about
 pages - a handler that parsed the request, a domain interface that declares the
 repository - can say so without importing a database driver. The execution
-lives in pgfx: [pgfx.DB.FetchPage] takes a [Query] and a [Request].
+lives in pgfx: pgfx.DB.FetchPage and pgfx.DB.FetchPageRows take a [Query] and a [Request].
 
 # The query
 
@@ -23,7 +23,8 @@ ordering by an expression means selecting it under an alias. And the count runs
 the filter a second time; [CountSQL] gives it a cheaper statement when the joins
 are there only for columns.
 
-	query, err := page.Make(fetchWarehousesSQL,
+	query, err := page.Make(
+		fetchWarehousesSQL,
 		page.Head(page.Desc("is_active")),
 		page.Tie(page.Asc("id")),
 		page.SortKeyTag("json"),
@@ -32,6 +33,25 @@ are there only for columns.
 [Tie] is required. A page needs a total order: without a unique column at the
 end of it, rows with equal sort keys change places between two queries, and then
 they repeat on one page and go missing from another.
+
+# Pagination strategies
+
+[Request] selects numbered LIMIT/OFFSET pages. FetchPage counts the base SELECT
+without the added order or page bounds. A nonempty incomplete page can infer
+the total; full and empty pages require counting. FetchPageRows builds only the
+rows statement through [Query.BuildRows]. [Query.BuildCount] builds a separate
+count, while [Query.Build] remains available when both statements are needed.
+
+[CursorRequest] selects keyset pages through pgfx.DB.FetchAfter or
+pgfx.Tx.FetchAfter. [Query.BuildAfter] uses comparisons of sort keys, with
+limited UNION ALL branches for mixed directions and NULL transitions. A matching
+B-tree index is needed for efficient seeking; arbitrary joins, expressions and
+sorts can still require substantial work. Cursor pagination does not provide
+random page numbers. FetchTotal explicitly counts the complete base filter.
+Neither pagination approach creates a transaction automatically.
+
+BETWEEN is not a pagination mode. Custom key-range queries remain ordinary SQL
+and can be executed with FetchRows.
 
 # The request
 
@@ -56,9 +76,8 @@ the API contract rather than of the query.
 
 [Order] leaves NULL placement to Postgres by default - NULLS LAST ascending,
 NULLS FIRST descending. That is what a plain btree index yields in either scan
-direction; pinning NULLs elsewhere stops matching the index and turns a scan
-into a sort of the whole filtered set. Where the index exists, [Nulls] says so
-explicitly. NULL placement does not affect the correctness of a page: the tie
+direction. A different NULL placement may require a different index or an
+explicit sort. [Nulls] selects the placement for each order term. NULL placement does not affect the correctness of a page: the tie
 order is what keeps it stable.
 */
 package page

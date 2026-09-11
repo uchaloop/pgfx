@@ -1,237 +1,118 @@
 /*
-Package pgfx is a thin, Fx-first layer over pgx/pgxpool for Postgres. A pgfx
-connection is a [DB]: a pool built from a plain, serializable [Config], carrying
-generic methods for the two things every query does - read rows, read one value.
+Package pgfx is a thin client that extends pgx/pgxpool with typed fetch methods,
+pagination, transaction callbacks, configuration and optional observability.
+It keeps SQL explicit and preserves the native pgx API: [DB] embeds
+*pgxpool.Pool and [Tx] embeds pgx.Tx. It is not an ORM or a replacement driver.
 
-# Config and Option
+# Configuration
 
-The split between the two is the design. [Config] is data: it survives a round
-trip through text, so a deployment fills it and a manifest lists it. Everything
-that cannot survive that trip - a tracer, a metrics callback, a pool hook, an
-in-memory *tls.Config - is an [Option] instead. Nothing is configured twice, and
-nothing has to be expressed as a string that was never a string.
+[Config] contains connection data; [Option] supplies runtime dependencies such
+as tracers, callbacks and an in-memory TLS configuration. The application
+constructs Config in Go or uses a loader of its choice. pgfx does not read a
+configuration source itself. Host and Database are required; optional fields
+retain their documented pgx defaults when unset.
 
-pgfx reads no configuration source of itself, which is what keeps it decoupled
-from any particular loader. An application supplies the Config, typically
-through github.com/uchaloop/confmaker, whose Manifest lists every variable a
-connection reads:
-
-	confx.Manifest[pgfx.Config]("postgres")
-
-Host and Database have to be supplied. An empty User or Password falls through
-to pgx's libpq-compatible defaults, so peer authentication and a .pgpass keep
-working. Every pool and timeout field left at its zero value keeps the pgxpool
-default, so a deployment sets what it means to change and nothing else.
-
-# Wiring
-
-[Module] provides an untagged *[DB] - the single default connection. It verifies
-the connection while the application starts, so a bad endpoint fails the start
-rather than the first query, and closes the pool on shutdown. Fx receives and
-provides only *DB; the embedded *pgxpool.Pool is not registered separately.
-
-[ModuleFor] adds a replica or a shard under a name, which gives both the Fx tag
-and the environment prefix:
+[Make] creates a pool owned by the caller, who must close it. Pool creation does
+not verify connectivity; use Ping when startup verification is required.
+[Module] supplies *DB through Uber Fx, verifies connectivity on application
+start and closes the pool on stop:
 
 	fx.New(
-		confx.Module(),
-		confx.Provide[pgfx.Config]("postgres"),
-		confx.ProvideNamed[pgfx.Config]("replica"),
-
+		fx.Supply(pgfx.Config{Host: "localhost:5432", Database: "orders"}),
 		pgfx.Module,
-		pgfx.ModuleFor("replica"),
-	)
+	).Run()
 
-A named connection inherits nothing from the default one. Its database, user and
-TLS settings are given again under its own prefix - a replica that silently
-borrowed the primary's credentials would be the kind of thing noticed in
-production.
+[ModuleFor] consumes a Config with an Fx name and provides a DB with the same
+name. Each named connection has its own configuration. The native pool is not
+registered separately in Fx; it is available through DB.Pool.
 
-Several databases are several named connections; there is no other mechanism.
-Without Fx, [Make] builds a DB from a Config filled by hand.
+For convenient environment loading and Fx integration, confmaker/confx is an
+optional recommended loader. It can replace manual Config construction; it is
+not required by pgfx. See the README for its setup and environment prefixes.
 
-# Queries
+# Typed fetches
 
-FetchRow and FetchRows decode structs by `db` tag or field name:
+[DB.FetchRows] and [DB.FetchRow] decode struct fields using db tags, falling back
+to field names. JSON/JSONB columns use pgx codecs, including map fields.
+[DB.FetchValues] and [DB.FetchValue] decode a single column into scalar values.
+The same methods are available on Tx.
 
-	order, err := db.FetchRow[Order](
-		ctx,
-		`SELECT id, amount FROM orders WHERE id = $1`, id,
-	)
-
-	orders, err := db.FetchRows[Order](
-		ctx,
-		`SELECT id, amount FROM orders ORDER BY id`,
-	)
-
-FetchValue and FetchValues decode one column:
-
-	total, err := db.FetchValue[int64](ctx, `SELECT count(*) FROM orders`)
-
-	ids, err := db.FetchValues[int64](
-		ctx,
-		`SELECT id FROM orders ORDER BY id`,
-	)
-
-The singular methods require exactly one row and report pgx.ErrNoRows or
-pgx.ErrTooManyRows otherwise. pgx.ErrNoRows wraps sql.ErrNoRows, so errors.Is
-matches either sentinel.
-
-DB embeds *pgxpool.Pool. Native methods such as Exec, Query, CopyFrom, Acquire,
-and Close are therefore available directly:
-
-	tag, err := db.Exec(
-		ctx,
-		`UPDATE orders SET status = $1 WHERE id = $2`,
-		"paid", id,
-	)
-
-Use FetchValue rather than Exec for INSERT ... RETURNING.
+Singular fetches require exactly one row and return pgx.ErrNoRows or
+pgx.ErrTooManyRows otherwise. Plural fetches accept an empty result. Use
+FetchValue for a single-column INSERT or UPDATE with RETURNING, and FetchRow
+for multiple returned columns. Native pgx operations remain available directly.
 
 # Pagination
 
-FetchPage returns one page of rows and how many rows the filter matches in
-total. The query stays a plain SELECT - no ORDER BY, no LIMIT, no row numbers,
-no count - and the page is applied around it, which is what keeps the filter
-written once and the rows decodable by the `db` tag like any other:
+[DB.FetchPage] returns a list and total: the total number of rows matching the
+base SELECT before pagination. [DB.FetchPageRows] returns only the list and
+never executes a count query. Both methods decode structs using the same db
+mapping as FetchRows and are also available on Tx.
 
-	SELECT * FROM ( <query> ) AS pgfx_page ORDER BY ... LIMIT $n+1 OFFSET $n+2
-	SELECT count(*) FROM ( <query> ) AS pgfx_page
+Build a [page.Query] once from a SELECT containing columns, joins and filters.
+Do not add top-level ORDER BY, LIMIT or pagination to that SELECT. Pass filter
+arguments separately from the [page.Request], starting at $1.
 
-The sort policy is bound once, next to the SQL; the page number, its size and
-the client's sort arrive per call, apart from the filter arguments:
+Numbered pages use LIMIT/OFFSET. [DB.FetchAfter] instead accepts a
+[page.CursorRequest] and returns a [page.CursorResult] with List, NextCursor and
+HasMore. It seeks after the last returned sort keys and fetches one extra row;
+it never counts. [DB.FetchTotal] explicitly counts the base filter independently.
+These methods are also available on Tx. Prefer offset for shallow numbered
+pages and cursor for sequential traversal of large results with matching indexes.
 
-	query, err := page.Make(fetchWarehousesSQL,
-		page.Head(page.Desc("is_active")),
-		page.Tie(page.Asc("id")),
-		page.SortKeyTag("json"),
-	)
+Cursor keys must be selected output columns. Tokens bind SQL, sort and filter
+arguments, which must have stable JSON representations. Tokens are not signed
+or encrypted and do not replace authorization. Supported key types are documented
+on [page.CursorStatement.Cursor]; arbitrary custom pgx types are not supported.
+Changing sort keys concurrently can still move rows across page boundaries.
 
-	warehouses, total, err := db.FetchPage[Warehouse](ctx, query,
-		page.Request{Number: 2, Size: 20, Sort: []string{"cityEng:desc"}},
-		params.Country,
-	)
+Sorting applies [page.Head], the requested sort, then [page.Tie]. Tie must
+provide a unique ordering for the result. Sort fields come from model tags or
+an explicit [page.Sortable] whitelist. [page.SortKeyTag] changes the client-facing
+names to another tag, such as json. Unknown sort fields return an error.
 
-The sortable fields are derived from the model, so they cannot drift away from
-the columns that are there; an unknown one is an error rather than a silent
-skip. [page.Tie] is required, because a page without a total order repeats rows
-on one page and loses them from another. The details - narrowing the whitelist,
-counting over a cheaper statement, NULL placement - are in the
-[github.com/uchaloop/pgfx/page] documentation.
+FetchPage counts the base SELECT in a separate statement unless a nonempty,
+incomplete page already determines the total. Full and empty pages require the
+count. [page.CountSQL] can supply a cheaper equivalent SELECT for counting; it
+must return the same number of rows and accept the same arguments. JOIN
+multiplicity, DISTINCT and GROUP BY belong to the base SELECT: pgfx counts its
+result rows, not inferred entities.
 
-The second statement is skipped whenever the rows already imply the total: a
-page shorter than it asked for is the last one. When it does run, it is reported
-to the metrics under the caller's query name with a ".count" suffix - it is a
-different statement with a cost of its own, and it does not run every time.
-
-An empty page is a valid result, not an error. [Tx.FetchPage] runs both
-statements inside a transaction, where a repeatable read isolation level makes
-the total agree with the page it describes.
+Pagination does not create a transaction. Concurrent writes can change data
+between the list and count statements. When one snapshot is required, call
+[Tx.FetchPage] inside [DB.Transaction] with pgx.RepeatableRead and, for reads,
+pgx.ReadOnly. This is an explicit caller choice.
 
 # Transactions
 
-[DB.Transaction] is the typed transaction entry point. It commits when its
-callback returns nil and rolls back on an error or panic. The callback receives
-a [Tx] with the same Fetch methods as DB and the embedded native pgx.Tx API:
-
-	err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
-		order, err := tx.FetchRow[Order](ctx, selectOrder, id)
-		if err != nil {
-			return err
-		}
-
-		_, err = tx.Exec(ctx, updateOrder, order.ID)
-		return err
-	})
-
-Inside the callback, use tx rather than db. A call through db uses the pool and
-does not participate in the transaction.
-
-The embedded pool's Begin and BeginTx remain the native manual API and return
-pgx.Tx:
-
-	tx, err := db.BeginTx(ctx, pgx.TxOptions{
-		IsoLevel: pgx.Serializable,
-	})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, insertOrder); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-
-[Tx.Transaction] creates a typed savepoint:
-
-	err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
-		return tx.Transaction(ctx, func(nested *pgfx.Tx) error {
-			_, err := nested.Exec(ctx, insertOptionalData)
-			return err
-		})
-	})
-
-DB embeds *pgxpool.Pool, so COPY, LISTEN, acquired connections and the rest of
-the native pool API are available directly. The pool itself is the DB.Pool
-field; no accessor is needed.
-
-# TLS
-
-TLS_MODE follows libpq, and verify-full with TLS_ROOT_CERT is the setting that
-actually verifies the server. [WithTLS] takes an in-memory *tls.Config instead,
-for an application that already assembled one - from a secret store, or from a
-certificate that never touched the filesystem.
+[DB.Transaction] commits when the callback returns nil and rolls back on an
+error or panic. Its callback receives a typed Tx. Use that Tx for every operation
+that belongs to the transaction; calls through DB use the pool instead.
+[Tx.Transaction] provides the same callback style for a nested savepoint.
+[Tx.BeginNested] returns a typed savepoint when manual ownership is needed.
+Isolation and access mode are supplied through pgx.TxOptions.
 
 # Tracing and metrics
 
-Under Fx, [Module] enables OpenTelemetry query spans by itself when a
-trace.TracerProvider is in the graph. [WithTracing] configures otelpgx directly,
-and [WithTracer] installs any pgx.QueryTracer.
+[WithTracing] enables otelpgx spans; [WithTracer] installs a custom pgx tracer.
+[Module] enables tracing when a trace.TracerProvider is supplied through Fx.
+[WithQueryMetrics] installs a callback without requiring a metrics backend.
+The callback must be concurrency-safe, cheap and non-blocking.
 
-Query, batch and COPY metrics are reported through a callback rather than to a
-metrics library, so pgfx holds no opinion about where they go:
+[WithQueryName] gives an operation a stable name. A pagination count uses that
+name with a .count suffix. SQL is omitted from metrics unless explicitly enabled
+with [WithSQLInQueryMetrics]. Use bounded names, not raw SQL, as metric labels.
 
-	fx.Supply(pgfx.QueryMetricFunc(func(metric pgfx.QueryMetric) {
-		// Use metric.Name and metric.Kind.String() as bounded labels.
-		// Record metric.Duration, metric.RowsAffected and metric.Err.
-		// This callback must be concurrency-safe, cheap and non-blocking.
-	}))
+Metrics follow pgx hooks. Duration includes result consumption but excludes pool
+acquisition. A batch produces one observation, with potentially partial row
+counts on error; it does not imply commit. Empty batches and pool acquisition
+failures are not observed. Some early COPY failures omit the end hook. See
+[QueryMetric] and [QueryMetricFunc] for the full callback contract.
 
-[WithQueryName] attaches a stable name to a query through the context, because
-the SQL itself is not a metric label - it varies, and it is unbounded.
+# TLS and connection hooks
 
-	ctx = pgfx.WithQueryName(ctx, "orders.get_by_id")
-
-Outside Fx, install the callback with [WithQueryMetrics]. A batch produces one
-observation, including results drained by Close:
-
-	batch := &pgx.Batch{}
-	batch.Queue("insert into orders (id) values ($1)", 1)
-	batch.Queue("insert into orders (id) values ($1)", 2)
-	results := db.SendBatch(pgfx.WithQueryName(ctx, "orders.sync"), batch)
-	if err := results.Close(); err != nil {
-		return err
-	}
-
-COPY is observed through the same callback with KindCopyFrom:
-
-	_, err := db.CopyFrom(pgfx.WithQueryName(ctx, "orders.load"),
-		pgx.Identifier{"orders"}, []string{"id"},
-		pgx.CopyFromRows([][]any{{int64(3)}, {int64(4)}}))
-
-Duration measures the pgx operation lifecycle, not server time or a pure round
-trip: it includes preparation, result consumption, delays before batch Close,
-and COPY source production, but excludes pool acquisition. Batch row counts sum
-observed command tags; they can be partial on error and do not imply a commit.
-
-Coverage follows pgx hooks. Empty batches and pool acquisition failures produce
-no metric. In pgx v5.10, early COPY statement-description errors also omit the
-end hook and are not reported. Always close batch results.
-
-SQL is omitted by default. [WithSQLInQueryMetrics] opts in to raw query text;
-batch statements are joined with "; " before rewriting, without interpolating
-arguments, and may include statements that never execute. COPY leaves SQL empty.
-Never use SQL as a label; scrub it before recording.
+[TLSConfig] supplies file-based TLS settings. [WithTLS] supplies an in-memory
+configuration and replaces the configured fallbacks. [WithBeforeConnect] and
+[WithAfterConnect] expose connection hooks for credentials and type registration.
 */
 package pgfx

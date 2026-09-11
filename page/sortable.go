@@ -46,7 +46,9 @@ func sortableOf(model reflect.Type, tagKey string) (Cols, error) {
 	}
 
 	sortable := make(Cols)
-	collectSortable(model, tagKey, sortable)
+	if err := collectSortable(model, tagKey, sortable); err != nil {
+		return nil, err
+	}
 
 	cached, _ := sortableCache.LoadOrStore(key, sortable)
 
@@ -55,7 +57,7 @@ func sortableOf(model reflect.Type, tagKey string) (Cols, error) {
 
 // collectSortable walks the model's fields, flattening embedded structs the way
 // pgx does when it matches columns to fields.
-func collectSortable(model reflect.Type, tagKey string, sortable Cols) {
+func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 	for i := range model.NumField() {
 		field := model.Field(i)
 		if len(field.PkgPath) > 0 && !field.Anonymous {
@@ -70,7 +72,9 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) {
 		if field.Anonymous &&
 			embedded.Kind() == reflect.Struct &&
 			len(tagName(field, columnTagKey)) == 0 {
-			collectSortable(embedded, tagKey, sortable)
+			if err := collectSortable(embedded, tagKey, sortable); err != nil {
+				return err
+			}
 
 			continue
 		}
@@ -92,8 +96,13 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) {
 			}
 		}
 
-		sortable[strings.ToLower(name)] = column
+		key := strings.ToLower(name)
+		if previous, ok := sortable[key]; ok && previous != column {
+			return fmt.Errorf("%w: %q", ErrAmbiguousSortField, name)
+		}
+		sortable[key] = column
 	}
+	return nil
 }
 
 // tagName returns the name part of a struct tag: "name,omitempty" -> "name".

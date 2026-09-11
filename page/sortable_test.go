@@ -124,3 +124,23 @@ func assertCols(t *testing.T, got, want Cols) {
 		}
 	}
 }
+
+func TestSortableRejectsAmbiguousTags(t *testing.T) {
+	type row struct {
+		First  string `db:"first" json:"Name"`
+		Second string `db:"second" json:"name"`
+	}
+	if _, err := sortableOf(reflect.TypeFor[row](), "json"); !errors.Is(err, ErrAmbiguousSortField) {
+		t.Fatal(err)
+	}
+	type embedded struct {
+		First string `db:"first" json:"name"`
+	}
+	type nested struct {
+		embedded
+		Second string `db:"second" json:"NAME"`
+	}
+	if _, err := sortableOf(reflect.TypeFor[nested](), "json"); !errors.Is(err, ErrAmbiguousSortField) {
+		t.Fatal(err)
+	}
+}

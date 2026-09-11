@@ -192,3 +192,114 @@ func TestBuildWithoutSortNeedsNoModel(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 }
+
+func TestBuildRejectsUninitializedQueryAndArgumentCount(t *testing.T) {
+	req := Request{Number: 1, Size: 20}
+	if _, err := (Query{}).Build(nil, req, 0); !errors.Is(err, ErrNoSQL) {
+		t.Fatalf("zero query: %v", err)
+	}
+	q := Must(selectSQL, Tie(Asc("id")))
+	for _, argc := range []int{-1, int(^uint(0) >> 1)} {
+		if _, err := q.Build(nil, req, argc); err == nil {
+			t.Fatalf("accepted argc %d", argc)
+		}
+	}
+}
+
+func TestCursorMixedUsesDisjointBranches(t *testing.T) {
+	q := Must("SELECT rank,id FROM items", Head(Desc("rank")), Tie(Asc("id")))
+	st, err := q.BuildAfter(nil, CursorRequest{Size: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := st.Cursor([]any{int64(10), int64(42)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = q.BuildAfter(nil, CursorRequest{Size: 20, After: cursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.Rows, "UNION ALL") || strings.Contains(st.Rows, " OR ") {
+		t.Fatal(st.Rows)
+	}
+	if !strings.Contains(st.Rows, `"rank" = $1 AND "id" > $2`) {
+		t.Fatal(st.Rows)
+	}
+}
+
+func TestBuildRowsDoesNotBuildCount(t *testing.T) {
+	q := Must(selectSQL, Tie(Asc("id")), CountSQL("SELECT expensive_count_source"))
+	st, err := q.BuildRows(nil, Request{Number: 2, Size: 20}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Count != "" {
+		t.Fatal(st.Count)
+	}
+	count, err := q.BuildCount()
+	if err != nil || !strings.Contains(count, "expensive_count_source") {
+		t.Fatalf("%s %v", count, err)
+	}
+}
+
+func BenchmarkPaginationBuild(b *testing.B) {
+	for _, mode := range []string{"offset", "first", "after", "mixed", "null"} {
+		b.Run(
+			mode,
+			func(b *testing.B) {
+				direction := Asc("rank")
+				if mode == "mixed" {
+					direction = Desc("rank")
+				}
+				q := Must("SELECT id, rank, meta FROM items WHERE tenant=$1", Head(direction), Tie(Asc("id")))
+				st, err := q.BuildAfter(nil, CursorRequest{Size: 20}, "tenant")
+				if err != nil {
+					b.Fatal(err)
+				}
+				keys := []any{int64(5), int64(900000)}
+				if mode == "null" {
+					keys[0] = nil
+				}
+				token, err := st.Cursor(keys)
+				if err != nil {
+					b.Fatal(err)
+				}
+				req := CursorRequest{Size: 20}
+				if mode != "first" {
+					req.After = token
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if mode == "offset" {
+						if _, err := q.BuildRows(nil, Request{Number: 45001, Size: 20}, 1); err != nil {
+							b.Fatal(err)
+						}
+					} else if _, err := q.BuildAfter(nil, req, "tenant"); err != nil {
+						b.Fatal(err)
+					}
+				}
+			},
+		)
+	}
+}
+
+func TestCursorBuildDoesNotMutateFilterArgs(t *testing.T) {
+	backing := []any{"tenant", "untouched", "untouched", "untouched"}
+	q := Must("SELECT id FROM items WHERE tenant=$1", Tie(Asc("id")))
+	st, err := q.BuildAfter(nil, CursorRequest{Size: 2}, backing[:1]...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := st.Cursor([]any{int64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.BuildAfter(nil, CursorRequest{Size: 2, After: token}, backing[:1]...); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(backing, []any{"tenant", "untouched", "untouched", "untouched"}) {
+		t.Fatal(backing)
+	}
+}

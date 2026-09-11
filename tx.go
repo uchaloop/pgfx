@@ -48,9 +48,8 @@ func (t *Tx) FetchValue[T any](ctx context.Context, sql string, args ...any) (T,
 
 // FetchPage runs a paginated query and decodes one page of struct rows into T,
 // with the number of rows the filter matches in total. It is [DB.FetchPage]
-// inside a transaction, where the rows and the count see one snapshot - under a
-// repeatable read isolation level, a total that cannot disagree with the page it
-// describes.
+// inside the caller's transaction. Use pgx.RepeatableRead when rows and total
+// must share a snapshot; the default isolation level does not guarantee this.
 func (t *Tx) FetchPage[T any](
 	ctx context.Context,
 	query page.Query,
@@ -58,6 +57,24 @@ func (t *Tx) FetchPage[T any](
 	args ...any,
 ) ([]T, uint, error) {
 	return collectPage[T](ctx, t.Tx, query, req, args)
+}
+
+// FetchPageRows returns one OFFSET/LIMIT page without a count query.
+func (t *Tx) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, error) {
+	return fetchPageRows[T](ctx, t.Tx, query, req, args)
+}
+
+// FetchTotal counts the complete base filter, honoring page.CountSQL.
+// It does not apply pagination or cursor bounds and creates no transaction.
+func (t *Tx) FetchTotal(ctx context.Context, query page.Query, args ...any) (uint, error) {
+	return collectTotal(ctx, t.Tx, query, args)
+}
+
+// FetchAfter returns the next keyset page without counting the full result.
+// Query sorting must include a unique Tie. The cursor is bound to the query,
+// filter arguments and effective order. No transaction is created automatically.
+func (t *Tx) FetchAfter[T any](ctx context.Context, query page.Query, req page.CursorRequest, args ...any) (page.CursorResult[T], error) {
+	return collectAfter[T](ctx, t.Tx, query, req, args)
 }
 
 // BeginNested starts a pseudo-nested transaction implemented by pgx with a

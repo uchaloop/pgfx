@@ -36,7 +36,7 @@ type Config struct {
 	Database string `env:"DATABASE,notEmpty"`
 	// User is the PostgreSQL role. When empty, libpq selects its default.
 	User string `env:"USER"`
-	// Password is read from the environment only. When empty, libpq may use
+	// Password holds the application-supplied secret. When empty, libpq may use
 	// PGPASSWORD or .pgpass.
 	Password secret.Secret `env:"PASSWORD"`
 	// AppName is reported as application_name in pg_stat_activity.

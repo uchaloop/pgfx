@@ -2,6 +2,7 @@ package page
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -9,10 +10,8 @@ import (
 //
 // The zero value keeps the Postgres default - NULLS LAST ascending, NULLS FIRST
 // descending - which is exactly what a plain btree index yields in either scan
-// direction. Overriding it is a valid choice, but it stops matching a default
-// index and turns an index scan into a sort of the whole filtered set, so it
-// belongs to a query that has an index built for it rather than to a
-// library-wide policy.
+// direction. Overriding it may require a different index or an explicit sort.
+// Choose placement for the query rather than as a library-wide policy.
 type Nulls uint8
 
 const (
@@ -48,6 +47,9 @@ func Desc(column string) Order {
 
 // validate reports whether the term can be rendered as an identifier.
 func (o Order) validate() error {
+	if o.Nulls > NullsLast {
+		return ErrInvalidNulls
+	}
 	if len(o.Column) == 0 || strings.ContainsRune(o.Column, 0) {
 		return fmt.Errorf("%w: %q", ErrInvalidColumn, o.Column)
 	}
@@ -55,27 +57,20 @@ func (o Order) validate() error {
 	return nil
 }
 
-// sql renders the term with its column quoted.
-func (o Order) sql() string {
-	var b strings.Builder
-
+// writeSQL appends one validated order term.
+func (o Order) writeSQL(b *strings.Builder) {
 	b.WriteString(quoteIdent(o.Column))
-
 	if o.Desc {
 		b.WriteString(" DESC")
 	} else {
 		b.WriteString(" ASC")
 	}
-
 	switch o.Nulls {
 	case NullsFirst:
 		b.WriteString(" NULLS FIRST")
 	case NullsLast:
 		b.WriteString(" NULLS LAST")
-	case NullsDefault:
 	}
-
-	return b.String()
 }
 
 // quoteIdent renders name as a quoted SQL identifier, so that a whitelisted
@@ -101,4 +96,68 @@ func parseSort(value string) (field string, desc bool, err error) {
 	default:
 		return "", false, fmt.Errorf("%w: %q", ErrInvalidSort, value)
 	}
+}
+
+func (q Query) orders(model reflect.Type, sort []string) ([]Order, error) {
+	sortable := q.sortable
+	if sortable == nil && len(sort) > 0 {
+		var err error
+		sortable, err = sortableOf(model, q.tagKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return q.resolveOrders(sortable, sort)
+}
+
+func renderOrders(orders []Order) string {
+	var sql strings.Builder
+	for i, order := range orders {
+		if i > 0 {
+			sql.WriteString(", ")
+		}
+		order.writeSQL(&sql)
+	}
+	return sql.String()
+}
+
+// resolveOrders assembles the ORDER BY: the head, then what the client asked for,
+// then the tie. A column already ordered by is not repeated, so a request that
+// names the tie column keeps the direction it asked for.
+func (q Query) resolveOrders(sortable Cols, sort []string) ([]Order, error) {
+	parts := make([]Order, 0, len(q.head)+len(sort)+len(q.tie))
+	seen := make(map[string]struct{}, cap(parts))
+
+	add := func(order Order) {
+		if _, ok := seen[order.Column]; ok {
+			return
+		}
+
+		seen[order.Column] = struct{}{}
+		parts = append(parts, order)
+	}
+
+	for _, order := range q.head {
+		add(order)
+	}
+
+	for _, value := range sort {
+		field, desc, err := parseSort(value)
+		if err != nil {
+			return nil, err
+		}
+
+		column, ok := sortable[strings.ToLower(field)]
+		if !ok {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownSortField, field)
+		}
+
+		add(Order{Column: column, Desc: desc})
+	}
+
+	for _, order := range q.tie {
+		add(order)
+	}
+
+	return parts, nil
 }

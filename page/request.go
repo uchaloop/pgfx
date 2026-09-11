@@ -24,7 +24,7 @@ type Request struct {
 
 // bounds converts the request into the LIMIT and OFFSET of the rows statement.
 func (r Request) bounds() (limit, offset uint, err error) {
-	if r.Number == 0 || r.Size == 0 {
+	if r.Number == 0 || r.Size == 0 || uint64(r.Size) > uint64(math.MaxInt64) {
 		return 0, 0, ErrInvalidRequest
 	}
 
@@ -35,4 +35,20 @@ func (r Request) bounds() (limit, offset uint, err error) {
 	}
 
 	return r.Size, (r.Number - 1) * r.Size, nil
+}
+
+// CursorRequest selects the next rows after a previous response. An empty After
+// starts a traversal. Size must be positive; it may change between requests.
+type CursorRequest struct {
+	Size  uint
+	After string
+	Sort  []string
+}
+
+// CursorResult is a keyset page. NextCursor is present only when HasMore is true.
+// It does not include a total; FetchTotal counts the base filter separately.
+type CursorResult[T any] struct {
+	List       []T    `json:"list"`
+	NextCursor string `json:"nextCursor,omitempty"`
+	HasMore    bool   `json:"hasMore"`
 }

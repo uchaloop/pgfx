@@ -3,6 +3,18 @@ package page
 import "errors"
 
 var (
+	// ErrInvalidCursor reports malformed, incompatible or oversized cursors.
+	ErrInvalidCursor = errors.New("invalid or incompatible cursor")
+	// ErrCursorValue reports a cursor key or filter value that cannot be encoded.
+	ErrCursorValue = errors.New("unsupported cursor value")
+	// ErrInvalidNulls reports an unknown NULL ordering policy.
+	ErrInvalidNulls = errors.New("invalid NULL ordering")
+	// ErrAmbiguousSortField reports conflicting case-insensitive sort names.
+	ErrAmbiguousSortField = errors.New("ambiguous sort field")
+
+	// ErrInvalidArgumentCount reports a negative or overflowing placeholder count.
+	ErrInvalidArgumentCount = errors.New("invalid query argument count")
+
 	// ErrNoSQL is reported by Make when the query text is empty.
 	ErrNoSQL = errors.New("empty page query")
 
