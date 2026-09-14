@@ -50,11 +50,10 @@ func (d *DB) FetchValue[T any](ctx context.Context, sql string, args ...any) (T,
 // the page number, its size and the client's sort; the rest of the arguments are
 // the query's own, numbered from $1.
 //
-// The page is applied around the query - ORDER BY, LIMIT and OFFSET are wrapped
-// on the outside - so the query stays a plain SELECT and its columns decode by
+// LIMIT/OFFSET is applied around the base SELECT. Columns decode by
 // the `db:"..."` tag as everywhere else. The total takes a second statement,
-// which is skipped whenever the returned rows already imply it. An empty page is
-// a valid result, not an error.
+// which is skipped when a nonempty page has no row after it. An empty page is a
+// valid result, not an error.
 func (d *DB) FetchPage[T any](
 	ctx context.Context,
 	query page.Query,
@@ -62,6 +61,26 @@ func (d *DB) FetchPage[T any](
 	args ...any,
 ) ([]T, uint, error) {
 	return collectPage[T](ctx, d.Pool, query, req, args)
+}
+
+// FetchPageRows runs a paginated query without counting: it returns one page of
+// struct rows and reports whether another page follows, which it learns by
+// reading one row past the page.
+func (d *DB) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, bool, error) {
+	return fetchPageRows[T](ctx, d.Pool, query, req, args)
+}
+
+// FetchTotal counts the complete base filter, honoring page.CountSQL.
+// It does not apply pagination or cursor bounds and creates no transaction.
+func (d *DB) FetchTotal(ctx context.Context, query page.Query, args ...any) (uint, error) {
+	return collectTotal(ctx, d.Pool, query, args)
+}
+
+// FetchAfter returns the next keyset page without counting the full result.
+// Query sorting must include a unique Tie. The cursor is bound to the query,
+// filter arguments and effective order. No transaction is created automatically.
+func (d *DB) FetchAfter[T any](ctx context.Context, query page.Query, req page.CursorRequest, args ...any) (page.CursorResult[T], error) {
+	return collectAfter[T](ctx, d.Pool, query, req, args)
 }
 
 // Transaction runs fn in a transaction. A nil error commits; a non-nil error

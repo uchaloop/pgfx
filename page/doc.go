@@ -5,7 +5,8 @@ and what a query is allowed to order by.
 It depends on nothing but the standard library, so the layers that speak about
 pages - a handler that parsed the request, a domain interface that declares the
 repository - can say so without importing a database driver. The execution
-lives in pgfx: [pgfx.DB.FetchPage] takes a [Query] and a [Request].
+lives in pgfx: pgfx.DB.FetchPage, pgfx.DB.FetchPageRows and pgfx.DB.FetchAfter
+take a [Query] and a request.
 
 # The query
 
@@ -23,29 +24,54 @@ ordering by an expression means selecting it under an alias. And the count runs
 the filter a second time; [CountSQL] gives it a cheaper statement when the joins
 are there only for columns.
 
-	query, err := page.Make(fetchWarehousesSQL,
+	query, err := page.Make(
+		fetchWarehousesSQL,
 		page.Head(page.Desc("is_active")),
 		page.Tie(page.Asc("id")),
-		page.SortKeyTag("json"),
+		page.Sortable(page.Cols{"cityEng": "city_eng", "createdAt": "created_at"}),
 	)
 
 [Tie] is required. A page needs a total order: without a unique column at the
 end of it, rows with equal sort keys change places between two queries, and then
-they repeat on one page and go missing from another.
+they repeat on one page and go missing from another. The tie keeps its own
+direction when it is the whole order; after other orders it takes the direction
+of the last one, so a composite index such as (city_eng, id) serves the whole
+order in one scan.
+
+# Pagination strategies
+
+[Request] selects numbered LIMIT/OFFSET pages. The rows statement reads one row
+past the page, which tells whether another page follows. FetchPage counts the
+base SELECT without the added order or page bounds, unless a nonempty page with
+no row after it already gives the total. FetchPageRows never counts and reports
+whether another page follows. [Query.BuildRows] and [Query.BuildCount] render
+the two statements separately, [Query.Build] both at once.
+
+[CursorRequest] selects keyset pages through pgfx.DB.FetchAfter or
+pgfx.Tx.FetchAfter. [Query.BuildAfter] uses comparisons of sort keys, with
+limited UNION ALL branches for mixed directions and NULL transitions. A matching
+B-tree index is needed for efficient seeking; arbitrary joins, expressions and
+sorts can still require substantial work. Cursor pagination does not provide
+random page numbers. FetchTotal explicitly counts the complete base filter.
+Neither pagination approach creates a transaction automatically.
+
+BETWEEN is not a pagination mode. Custom key-range queries remain ordinary SQL
+and can be executed with FetchRows.
 
 # The request
 
 A [Request] is a page number, a page size and the sort fields as the client
 spelled them:
 
-	page.Request{Number: 2, Size: 20, Sort: []string{"city_eng:desc"}}
+	page.Request{Number: 2, Size: 20, Sort: []string{"cityEng:desc"}}
 
 Sort fields are matched case-insensitively against a whitelist, and an unknown
 one is [ErrUnknownSortField] rather than a silent skip - a client that asked for
-an order it did not get should hear about it. The whitelist is derived from the
-model the rows decode into, so it cannot drift away from the columns that are
-actually there; [Sortable] narrows it, and [SortKeyTag] switches the names a
-client uses to another tag on the same model.
+an order it did not get should hear about it. [Sortable] is the whitelist: list
+the fields an index serves, since a sort without one reads and sorts the whole
+result on every page. [SortKeyTag] opens every field of the model the rows
+decode into instead, named by a struct tag such as json. Without either, a
+client may not sort.
 
 A zero number or size is [ErrInvalidRequest]. Substituting defaults for a page a
 client did not fully specify belongs at the edge that parsed the request: only
@@ -56,9 +82,9 @@ the API contract rather than of the query.
 
 [Order] leaves NULL placement to Postgres by default - NULLS LAST ascending,
 NULLS FIRST descending. That is what a plain btree index yields in either scan
-direction; pinning NULLs elsewhere stops matching the index and turns a scan
-into a sort of the whole filtered set. Where the index exists, [Nulls] says so
-explicitly. NULL placement does not affect the correctness of a page: the tie
-order is what keeps it stable.
+direction. A different NULL placement may require a different index or an
+explicit sort. [Nulls] selects the placement for each order term. NULL placement
+does not affect the correctness of a page: the tie order is what keeps it
+stable.
 */
 package page

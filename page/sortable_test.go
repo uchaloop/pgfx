@@ -15,7 +15,7 @@ func TestSortableFromColumnTag(t *testing.T) {
 		hidden   string // an unexported field is not a column
 	}
 
-	got, err := sortableOf(reflect.TypeFor[row](), defaultTagKey)
+	got, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
 	if err != nil {
 		t.Fatalf("sortableOf: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestSortableFlattensEmbedded(t *testing.T) {
 		ID int64 `db:"id"`
 	}
 
-	got, err := sortableOf(reflect.TypeFor[row](), defaultTagKey)
+	got, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
 	if err != nil {
 		t.Fatalf("sortableOf: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSortableTaggedEmbeddedIsOneColumn(t *testing.T) {
 		ID int64 `db:"id"`
 	}
 
-	got, err := sortableOf(reflect.TypeFor[row](), defaultTagKey)
+	got, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
 	if err != nil {
 		t.Fatalf("sortableOf: %v", err)
 	}
@@ -82,11 +82,11 @@ func TestSortableTaggedEmbeddedIsOneColumn(t *testing.T) {
 }
 
 func TestSortableRejectsNonStruct(t *testing.T) {
-	if _, err := sortableOf(reflect.TypeFor[int64](), defaultTagKey); !errors.Is(err, ErrUnsortableModel) {
+	if _, err := sortableOf(reflect.TypeFor[int64](), columnTagKey); !errors.Is(err, ErrUnsortableModel) {
 		t.Fatalf("err = %v, want ErrUnsortableModel", err)
 	}
 
-	if _, err := sortableOf(nil, defaultTagKey); !errors.Is(err, ErrUnsortableModel) {
+	if _, err := sortableOf(nil, columnTagKey); !errors.Is(err, ErrUnsortableModel) {
 		t.Fatalf("err = %v, want ErrUnsortableModel", err)
 	}
 }
@@ -96,12 +96,12 @@ func TestSortableIsCached(t *testing.T) {
 		ID int64 `db:"id"`
 	}
 
-	first, err := sortableOf(reflect.TypeFor[row](), defaultTagKey)
+	first, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
 	if err != nil {
 		t.Fatalf("sortableOf: %v", err)
 	}
 
-	second, err := sortableOf(reflect.TypeFor[row](), defaultTagKey)
+	second, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
 	if err != nil {
 		t.Fatalf("sortableOf: %v", err)
 	}
@@ -122,5 +122,25 @@ func assertCols(t *testing.T, got, want Cols) {
 		if got[field] != column {
 			t.Fatalf("cols = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestSortableRejectsAmbiguousTags(t *testing.T) {
+	type row struct {
+		First  string `db:"first" json:"Name"`
+		Second string `db:"second" json:"name"`
+	}
+	if _, err := sortableOf(reflect.TypeFor[row](), "json"); !errors.Is(err, ErrAmbiguousSortField) {
+		t.Fatal(err)
+	}
+	type embedded struct {
+		First string `db:"first" json:"name"`
+	}
+	type nested struct {
+		embedded
+		Second string `db:"second" json:"NAME"`
+	}
+	if _, err := sortableOf(reflect.TypeFor[nested](), "json"); !errors.Is(err, ErrAmbiguousSortField) {
+		t.Fatal(err)
 	}
 }

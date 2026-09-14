@@ -6,9 +6,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Make validates cfg and opens a connection for it, applying the runtime opts.
-// The caller owns the returned DB and must call Close; the Fx module does that
-// through the lifecycle.
+// Make validates cfg and creates a pool, applying the runtime opts.
+// Call Ping to verify connectivity. The caller owns the returned DB and must
+// call Close; Module manages verification and cleanup through the Fx lifecycle.
 func Make(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err

@@ -5,6 +5,28 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-14
+
+### Added
+
+- `FetchAfter` for keyset pages with opaque cursors, and `FetchTotal` for a
+  separate count of the base filter.
+- `FetchPageRows` for numbered pages without a count; it reports whether another
+  page follows.
+- `Query.BuildRows`, `BuildCount` and `BuildAfter` for running the statements
+  directly.
+
+### Changed
+
+- Client sorting needs an explicit `Sortable` whitelist; `SortKeyTag` opts into
+  deriving it from the model.
+- The tie takes the direction of the order before it, so one composite index
+  serves the whole order.
+- Page statements read one row past the page; `FetchPage` counts only when more
+  rows follow or the page is empty.
+- `Make` rejects an unknown NULL placement and whitelist names that differ only
+  in case.
+
 ## [0.7.0] - 2026-09-03
 
 ### Added
@@ -72,7 +94,7 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 - The package documentation carries the config fields, the options and the
   wiring, with the reasons behind them; the README is a landing page. The package
-  comment moved from `pgfx.go` into `doc.go`.
+  comment moved from `make.go` into `doc.go`.
 - `Config.Validate` accumulates through `github.com/uchaloop/validate` instead of
   a hand-rolled slice and `errors.Join`. The messages and their order are
   unchanged.
@@ -154,7 +176,8 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.6.0...HEAD
+[0.8.0]: https://github.com/uchaloop/pgfx/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/uchaloop/pgfx/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/uchaloop/pgfx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/uchaloop/pgfx/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/uchaloop/pgfx/compare/v0.3.0...v0.4.0
