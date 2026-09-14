@@ -12,9 +12,6 @@ import (
 // construction: every sortable field is a column the page actually returns.
 const columnTagKey = "db"
 
-// defaultTagKey is the struct tag holding the name a client sorts by.
-const defaultTagKey = columnTagKey
-
 // sortableCache holds the whitelist derived for a model and a tag. Deriving it
 // is reflection over a type, and a type does not change.
 var sortableCache sync.Map // sortableKey -> Cols

@@ -98,15 +98,19 @@ func parseSort(value string) (field string, desc bool, err error) {
 	}
 }
 
+// orders resolves the ORDER BY for a request. A whitelist is derived from the
+// model only when SortKeyTag asks for it; without one, any requested sort field
+// is unknown.
 func (q Query) orders(model reflect.Type, sort []string) ([]Order, error) {
 	sortable := q.sortable
-	if sortable == nil && len(sort) > 0 {
+	if sortable == nil && len(sort) > 0 && len(q.tagKey) > 0 {
 		var err error
 		sortable, err = sortableOf(model, q.tagKey)
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	return q.resolveOrders(sortable, sort)
 }
 
@@ -155,7 +159,19 @@ func (q Query) resolveOrders(sortable Cols, sort []string) ([]Order, error) {
 		add(Order{Column: column, Desc: desc})
 	}
 
+	// After other orders the tie takes the direction of the last one, so that
+	// one composite index serves the whole order; alone, it keeps its own.
+	follow := len(parts) > 0
+	var desc bool
+	if follow {
+		desc = parts[len(parts)-1].Desc
+	}
+
 	for _, order := range q.tie {
+		if follow {
+			order.Desc = desc
+		}
+
 		add(order)
 	}
 

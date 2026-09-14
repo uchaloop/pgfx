@@ -139,37 +139,59 @@ func TestFetchPageIntegration(t *testing.T) {
 
 }
 
+// cursorDB connects to the database the cursor tests run on: the pagination-lab
+// stand when PGFX_CURSOR_TEST_HOST names it, otherwise the PGFX_TEST_* database
+// CI provides. The tests read generated rows, so any database serves; only
+// TestCursorPlans needs the populated stand.
 func cursorDB(t *testing.T) (*DB, context.Context) {
 	t.Helper()
-	host := os.Getenv("PGFX_CURSOR_TEST_HOST")
-	if host == "" {
-		t.Skip("PGFX_CURSOR_TEST_HOST is not set")
+
+	var cfg Config
+	if host := os.Getenv("PGFX_CURSOR_TEST_HOST"); host != "" {
+		cfg = Config{
+			Host:     host,
+			Database: "pagination_lab",
+			User:     "pagination_lab",
+			Password: secret.New("pagination_lab"),
+			TLS:      TLSConfig{Mode: "disable"},
+		}
+	} else if host := os.Getenv("PGFX_TEST_HOST"); host != "" {
+		cfg = integrationConfig(host, 5*time.Second)
+	} else {
+		t.Skip("neither PGFX_CURSOR_TEST_HOST nor PGFX_TEST_HOST is set")
 	}
+
+	cfg.Pool = PoolConfig{MaxConns: 1}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
-	db, err := Make(ctx, Config{Host: host, Database: "pagination_lab", User: "pagination_lab", Password: secret.New("pagination_lab"), TLS: TLSConfig{Mode: "disable"}, Pool: PoolConfig{MaxConns: 1}})
+
+	db, err := Make(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(db.Close)
+
 	return db, ctx
 }
 
 type cursorItem struct {
-	ID   int64          `db:"id"`
-	Rank *int64         `db:"rank"`
-	Meta map[string]any `db:"meta"`
+	ID     int64          `db:"id"`
+	Rank   *int64         `db:"rank"`
+	Bucket int64          `db:"bucket"`
+	Meta   map[string]any `db:"meta"`
 }
 
 func TestCursorIntegration(t *testing.T) {
 	db, ctx := cursorDB(t)
-	base := `SELECT (i*2)::bigint AS id, CASE WHEN i%5=0 THEN NULL ELSE i%3 END::bigint AS rank, CASE WHEN i%7=0 THEN NULL ELSE jsonb_build_object('n',i) END AS meta FROM generate_series(1,127) i WHERE i%4<>$1`
+	base := `SELECT (i*2)::bigint AS id, CASE WHEN i%5=0 THEN NULL ELSE i%3 END::bigint AS rank, (i%2)::bigint AS bucket, CASE WHEN i%7=0 THEN NULL ELSE jsonb_build_object('n',i) END AS meta FROM generate_series(1,127) i WHERE i%4<>$1`
 	for _, desc := range []bool{false, true} {
 		for _, first := range []bool{false, true} {
 			for _, tieDesc := range []bool{false, true} {
-				direction := "ASC"
+				direction, opposite := "ASC", "DESC"
 				if desc {
-					direction = "DESC"
+					direction, opposite = "DESC", "ASC"
 				}
 				nulls := "LAST"
 				policy := page.NullsLast
@@ -181,11 +203,18 @@ func TestCursorIntegration(t *testing.T) {
 				if tieDesc {
 					tieDirection = "DESC"
 				}
-				expected, err := db.FetchRows[cursorItem](ctx, "SELECT * FROM ("+base+") x ORDER BY rank "+direction+" NULLS "+nulls+",id "+tieDirection, 0)
+				// The head mixes directions around a nullable key. The tie follows
+				// the last head term, whatever direction it declares.
+				expected, err := db.FetchRows[cursorItem](ctx, "SELECT * FROM ("+base+") x ORDER BY rank "+direction+" NULLS "+nulls+", bucket "+opposite+", id "+opposite, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
-				q := page.Must(base, page.Head(page.Order{Column: "rank", Desc: desc, Nulls: policy}), page.Tie(page.Order{Column: "id", Desc: tieDesc}), page.CountSQL("SELECT * FROM missing_count_table"))
+				q := page.Must(
+					base,
+					page.Head(page.Order{Column: "rank", Desc: desc, Nulls: policy}, page.Order{Column: "bucket", Desc: !desc}),
+					page.Tie(page.Order{Column: "id", Desc: tieDesc}),
+					page.CountSQL("SELECT * FROM missing_count_table"),
+				)
 				var after string
 				var all []cursorItem
 				for n := 0; n < 100; n++ {

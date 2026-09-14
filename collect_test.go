@@ -347,7 +347,8 @@ func TestCollectPageShortPageSkipsCount(t *testing.T) {
 		t.Fatalf("rows statement = %q, want the trailing semicolon stripped", q.sql[0])
 	}
 
-	wantArgs := []any{"TR", uint(5), uint(10)}
+	// The rows statement asks for one row past the page of five.
+	wantArgs := []any{"TR", uint(6), uint(10)}
 	if len(q.args[0]) != len(wantArgs) {
 		t.Fatalf("args = %v, want %v", q.args[0], wantArgs)
 	}
@@ -358,9 +359,26 @@ func TestCollectPageShortPageSkipsCount(t *testing.T) {
 	}
 }
 
-func TestCollectPageFullPageCounts(t *testing.T) {
+func TestCollectPageFullLastPageSkipsCount(t *testing.T) {
+	q := &scriptedQuerier{rows: []pgx.Rows{warehouseRows(1, 2)}}
+
+	rows, total, err := collectPage[warehouse](
+		context.Background(), q, warehouseQuery(t),
+		page.Request{Number: 1, Size: 2}, []any{"TR"},
+	)
+	if err != nil {
+		t.Fatalf("collectPage: %v", err)
+	}
+
+	// No row came after the full page, so it is the last one.
+	if len(rows) != 2 || total != 2 || len(q.sql) != 1 {
+		t.Fatalf("rows = %d, total = %d, statements = %d; want 2, 2 and 1", len(rows), total, len(q.sql))
+	}
+}
+
+func TestCollectPageCountsWhenMoreRowsFollow(t *testing.T) {
 	q := &scriptedQuerier{rows: []pgx.Rows{
-		warehouseRows(1, 2),
+		warehouseRows(1, 2, 3),
 		newFakeRows([]string{"count"}, []any{int64(97)}),
 	}}
 
@@ -372,17 +390,45 @@ func TestCollectPageFullPageCounts(t *testing.T) {
 		t.Fatalf("collectPage: %v", err)
 	}
 
+	// The third row only says that more follow; it is not part of the page.
 	if len(rows) != 2 || total != 97 {
 		t.Fatalf("rows = %d, total = %d, want 2 and 97", len(rows), total)
 	}
 	if len(q.sql) != 2 {
-		t.Fatalf("statements = %d, want 2 (a full page says nothing about the total)", len(q.sql))
+		t.Fatalf("statements = %d, want 2 (rows follow the page)", len(q.sql))
 	}
 	if !strings.HasPrefix(q.sql[1], "SELECT count(*) FROM (") {
 		t.Fatalf("count statement = %q", q.sql[1])
 	}
 	if len(q.args[1]) != 1 || q.args[1][0] != "TR" {
 		t.Fatalf("count args = %v, want the query args alone", q.args[1])
+	}
+}
+
+func TestFetchPageRowsReportsMore(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ids  []int64
+		more bool
+	}{
+		{name: "more rows follow", ids: []int64{1, 2, 3}, more: true},
+		{name: "last page", ids: []int64{1, 2}, more: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			q := &scriptedQuerier{rows: []pgx.Rows{warehouseRows(test.ids...)}}
+
+			rows, more, err := fetchPageRows[warehouse](
+				context.Background(), q, warehouseQuery(t),
+				page.Request{Number: 1, Size: 2}, []any{"TR"},
+			)
+			if err != nil {
+				t.Fatalf("fetchPageRows: %v", err)
+			}
+
+			if len(rows) != 2 || more != test.more || len(q.sql) != 1 {
+				t.Fatalf("rows = %d, more = %t, statements = %d; want 2, %t and 1", len(rows), more, len(q.sql), test.more)
+			}
+		})
 	}
 }
 
@@ -411,16 +457,22 @@ func TestCollectPageEmptyPageCounts(t *testing.T) {
 
 func TestCollectPageSortsByModelTag(t *testing.T) {
 	q := &scriptedQuerier{rows: []pgx.Rows{warehouseRows(1)}}
+	query := page.Must(
+		"SELECT w.id, w.city_eng FROM warehouses w WHERE w.country = $1",
+		page.Tie(page.Asc("id")),
+		page.SortKeyTag("db"),
+	)
 
 	_, _, err := collectPage[warehouse](
-		context.Background(), q, warehouseQuery(t),
+		context.Background(), q, query,
 		page.Request{Number: 1, Size: 5, Sort: []string{"city_eng:desc"}}, []any{"TR"},
 	)
 	if err != nil {
 		t.Fatalf("collectPage: %v", err)
 	}
 
-	want := `ORDER BY "city_eng" DESC, "id" ASC`
+	// The tie takes the direction of the order before it.
+	want := `ORDER BY "city_eng" DESC, "id" DESC`
 	if !strings.Contains(q.sql[0], want) {
 		t.Fatalf("rows statement = %q, want it to contain %q", q.sql[0], want)
 	}
@@ -487,7 +539,7 @@ func TestCollectPageRowsNeverCounts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows, err := collectPageRows[warehouse](context.Background(), q, statements, nil)
+			rows, _, err := collectPageRows[warehouse](context.Background(), q, statements, nil)
 			if err != nil || len(rows) != n || len(q.sql) != 1 || !data.closed {
 				t.Fatalf("rows=%v queries=%d err=%v", rows, len(q.sql), err)
 			}
@@ -518,11 +570,11 @@ func TestTxFetchPageRows(t *testing.T) {
 		driver := &scriptedQuerier{rows: []pgx.Rows{newFakeRows(columns, values...)}}
 		tx := wrapTx(pageRowsTx{querier: driver})
 		q := page.Must("SELECT id,city_eng FROM warehouses", page.Tie(page.Asc("id")))
-		rows, err := tx.FetchPageRows[warehouse](context.Background(), q, page.Request{Number: 1, Size: 2})
+		rows, _, err := tx.FetchPageRows[warehouse](context.Background(), q, page.Request{Number: 1, Size: 2})
 		if err != nil || len(rows) != n || len(driver.sql) != 1 {
 			t.Fatalf("rows=%v err=%v", rows, err)
 		}
-		_, err = tx.FetchPageRows[warehouse](context.Background(), q, page.Request{})
+		_, _, err = tx.FetchPageRows[warehouse](context.Background(), q, page.Request{})
 		if !errors.Is(err, page.ErrInvalidRequest) || len(driver.sql) != 1 {
 			t.Fatalf("invalid request reached driver: %v", err)
 		}

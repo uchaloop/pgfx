@@ -24,7 +24,9 @@ type Request struct {
 
 // bounds converts the request into the LIMIT and OFFSET of the rows statement.
 func (r Request) bounds() (limit, offset uint, err error) {
-	if r.Number == 0 || r.Size == 0 || uint64(r.Size) > uint64(math.MaxInt64) {
+	// The statement reads one row past the page, and Postgres takes LIMIT as a
+	// bigint, so Size+1 has to fit one.
+	if r.Number == 0 || r.Size == 0 || uint64(r.Size) >= uint64(math.MaxInt64) {
 		return 0, 0, ErrInvalidRequest
 	}
 
@@ -45,10 +47,11 @@ type CursorRequest struct {
 	Sort  []string
 }
 
-// CursorResult is a keyset page. NextCursor is present only when HasMore is true.
+// CursorResult is a keyset page. NextCursor is set only when HasMore is true.
 // It does not include a total; FetchTotal counts the base filter separately.
+// It carries no JSON tags: the shape of a response belongs to the application.
 type CursorResult[T any] struct {
-	List       []T    `json:"list"`
-	NextCursor string `json:"nextCursor,omitempty"`
-	HasMore    bool   `json:"hasMore"`
+	List       []T
+	NextCursor string
+	HasMore    bool
 }

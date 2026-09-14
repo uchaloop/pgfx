@@ -12,9 +12,6 @@ var (
 	// ErrAmbiguousSortField reports conflicting case-insensitive sort names.
 	ErrAmbiguousSortField = errors.New("ambiguous sort field")
 
-	// ErrInvalidArgumentCount reports a negative or overflowing placeholder count.
-	ErrInvalidArgumentCount = errors.New("invalid query argument count")
-
 	// ErrNoSQL is reported by Make when the query text is empty.
 	ErrNoSQL = errors.New("empty page query")
 
@@ -39,11 +36,12 @@ var (
 
 	// ErrUnknownSortField is reported when a sort field is not in the whitelist.
 	// It is an error rather than a silent skip: a client that asked for an order
-	// it did not get should hear about it.
+	// it did not get should hear about it. A query without Sortable or
+	// SortKeyTag has no whitelist, so every requested field is unknown.
 	ErrUnknownSortField = errors.New("unknown sort field")
 
-	// ErrUnsortableModel is reported when the sort whitelist has to be derived
-	// from a model that is not a struct. Give the whitelist with Sortable, or
-	// decode into a struct.
+	// ErrUnsortableModel is reported when SortKeyTag derives the whitelist from
+	// a model that is not a struct. Give the whitelist with Sortable, or decode
+	// into a struct.
 	ErrUnsortableModel = errors.New("sort whitelist needs a struct model")
 )

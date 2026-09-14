@@ -122,13 +122,13 @@ func ExampleDB_FetchPageRows() {
 	db := exampleDB()
 	defer db.Close()
 	query := page.Must(`SELECT id, amount, meta FROM orders WHERE amount >= $1`, page.Tie(page.Asc("id")))
-	// No count statement is executed, even for full or empty pages.
-	list, err := db.FetchPageRows[order](context.Background(), query, page.Request{Number: 1, Size: 20}, 100)
+	// No count statement runs; more says whether another page follows.
+	list, more, err := db.FetchPageRows[order](context.Background(), query, page.Request{Number: 1, Size: 20}, 100)
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	fmt.Println(list)
+	fmt.Println(list, more)
 }
 
 func ExampleDB_Transaction() {
@@ -233,11 +233,11 @@ func ExampleTx_FetchPageRows() {
 		ctx,
 		pgx.TxOptions{AccessMode: pgx.ReadOnly},
 		func(tx *pgfx.Tx) error {
-			list, err := tx.FetchPageRows[order](ctx, query, page.Request{Number: 1, Size: 20})
+			list, more, err := tx.FetchPageRows[order](ctx, query, page.Request{Number: 1, Size: 20})
 			if err != nil {
 				return err
 			}
-			fmt.Println(list)
+			fmt.Println(list, more)
 			return nil
 		},
 	)

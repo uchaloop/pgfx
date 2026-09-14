@@ -59,8 +59,10 @@ func (t *Tx) FetchPage[T any](
 	return collectPage[T](ctx, t.Tx, query, req, args)
 }
 
-// FetchPageRows returns one OFFSET/LIMIT page without a count query.
-func (t *Tx) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, error) {
+// FetchPageRows runs a paginated query without counting: it returns one page of
+// struct rows and reports whether another page follows. It is
+// [DB.FetchPageRows] inside the caller's transaction.
+func (t *Tx) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, bool, error) {
 	return fetchPageRows[T](ctx, t.Tx, query, req, args)
 }
 

@@ -52,8 +52,8 @@ func (d *DB) FetchValue[T any](ctx context.Context, sql string, args ...any) (T,
 //
 // LIMIT/OFFSET is applied around the base SELECT. Columns decode by
 // the `db:"..."` tag as everywhere else. The total takes a second statement,
-// which is skipped whenever the returned rows already imply it. An empty page is
-// a valid result, not an error.
+// which is skipped when a nonempty page has no row after it. An empty page is a
+// valid result, not an error.
 func (d *DB) FetchPage[T any](
 	ctx context.Context,
 	query page.Query,
@@ -63,8 +63,10 @@ func (d *DB) FetchPage[T any](
 	return collectPage[T](ctx, d.Pool, query, req, args)
 }
 
-// FetchPageRows returns one OFFSET/LIMIT page without a count query.
-func (d *DB) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, error) {
+// FetchPageRows runs a paginated query without counting: it returns one page of
+// struct rows and reports whether another page follows, which it learns by
+// reading one row past the page.
+func (d *DB) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, bool, error) {
 	return fetchPageRows[T](ctx, d.Pool, query, req, args)
 }
 

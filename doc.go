@@ -45,15 +45,16 @@ for multiple returned columns. Native pgx operations remain available directly.
 # Pagination
 
 [DB.FetchPage] returns a list and total: the total number of rows matching the
-base SELECT before pagination. [DB.FetchPageRows] returns only the list and
-never executes a count query. Both methods decode structs using the same db
-mapping as FetchRows and are also available on Tx.
+base SELECT before pagination. [DB.FetchPageRows] returns the list and whether
+another page follows, and never executes a count query. Both methods decode
+structs using the same db mapping as FetchRows and are also available on Tx.
 
 Build a [page.Query] once from a SELECT containing columns, joins and filters.
 Do not add top-level ORDER BY, LIMIT or pagination to that SELECT. Pass filter
 arguments separately from the [page.Request], starting at $1.
 
-Numbered pages use LIMIT/OFFSET. [DB.FetchAfter] instead accepts a
+Numbered pages use LIMIT/OFFSET and read one row past the page, which tells
+whether another page follows. [DB.FetchAfter] instead accepts a
 [page.CursorRequest] and returns a [page.CursorResult] with List, NextCursor and
 HasMore. It seeks after the last returned sort keys and fetches one extra row;
 it never counts. [DB.FetchTotal] explicitly counts the base filter independently.
@@ -67,13 +68,16 @@ on [page.CursorStatement.Cursor]; arbitrary custom pgx types are not supported.
 Changing sort keys concurrently can still move rows across page boundaries.
 
 Sorting applies [page.Head], the requested sort, then [page.Tie]. Tie must
-provide a unique ordering for the result. Sort fields come from model tags or
-an explicit [page.Sortable] whitelist. [page.SortKeyTag] changes the client-facing
-names to another tag, such as json. Unknown sort fields return an error.
+provide a unique ordering for the result; after other orders it takes the
+direction of the last one, so one composite index serves the whole order. A
+client sorts only by the fields [page.Sortable] lists; [page.SortKeyTag] opens
+every field of the model under the names of a struct tag, such as json. Unknown
+sort fields return an error.
 
-FetchPage counts the base SELECT in a separate statement unless a nonempty,
-incomplete page already determines the total. Full and empty pages require the
-count. [page.CountSQL] can supply a cheaper equivalent SELECT for counting; it
+FetchPage counts the base SELECT in a separate statement unless a nonempty page
+with no row after it already determines the total. A page that more rows follow,
+and an empty page, require the count. [page.CountSQL] can supply a cheaper
+equivalent SELECT for counting; it
 must return the same number of rows and accept the same arguments. JOIN
 multiplicity, DISTINCT and GROUP BY belong to the base SELECT: pgfx counts its
 result rows, not inferred entities.

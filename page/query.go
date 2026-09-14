@@ -49,25 +49,33 @@ func Head(orders ...Order) Option {
 // page needs a total order, and only a unique column - the primary key, as a
 // rule - provides one. Without it, rows with equal sort keys repeat on one page
 // and vanish from another.
+//
+// The tie's own direction applies when it is the whole order, so Tie(Desc("id"))
+// lists the newest rows first by default. After other orders it takes the
+// direction of the last one: rows with equal keys may come in either order, and
+// a single composite index, such as (updated_at, id), then serves the whole
+// order in one scan.
 func Tie(orders ...Order) Option {
 	return func(q *Query) {
 		q.tie = append(q.tie, orders...)
 	}
 }
 
-// Sortable replaces the derived whitelist with an explicit one, which is how a
-// column that is expensive to order by is kept out of the client's reach.
+// Sortable is the whitelist of fields a client may sort by, mapped to the
+// output columns they order by. List only what an index serves: a sort without
+// one reads and sorts the whole result on every page. Without Sortable or
+// SortKeyTag, a client may not sort at all.
 func Sortable(cols Cols) Option {
 	return func(q *Query) {
 		q.sortable = cols
 	}
 }
 
-// SortKeyTag names the struct tag holding the field name a client sorts by. It
-// defaults to "db", where the sortable fields are exactly the model's columns.
-// A model that carries both tags maps one vocabulary onto the other with
-// SortKeyTag("json"): the json tag is what the client sends, the db tag is the
-// column it orders by. It is ignored when Sortable is given.
+// SortKeyTag lets a client sort by any field of the model the rows decode into,
+// named by the given struct tag: "db" for column names, "json" for the names of
+// the API, with the db tag giving the column. Every column becomes sortable,
+// including ones without an index, so prefer Sortable for large results. It is
+// ignored when Sortable is given.
 func SortKeyTag(tag string) Option {
 	return func(q *Query) {
 		q.tagKey = tag
@@ -87,7 +95,7 @@ func CountSQL(sql string) Option {
 // Make builds a page query and validates it once, at startup rather than per
 // request.
 func Make(sql string, opts ...Option) (Query, error) {
-	q := Query{sql: trimSQL(sql), tagKey: defaultTagKey}
+	q := Query{sql: trimSQL(sql)}
 
 	for _, opt := range opts {
 		if opt != nil {
@@ -149,14 +157,15 @@ func Must(sql string, opts ...Option) Query {
 
 // Statements are the two statements one page takes.
 type Statements struct {
-	// Rows takes the query's own arguments followed by PagingArgs.
+	// Rows takes the query's own arguments followed by PagingArgs. It reads one
+	// row past the page: that row only tells whether another page follows.
 	Rows string
 
-	// Count takes the query's own arguments alone. It is not always run: a page
-	// nonempty and shorter than Limit already says how many rows there are.
+	// Count takes the query's own arguments alone. It is not always run: a
+	// nonempty page with no row after it already says how many rows there are.
 	Count string
 
-	// PagingArgs follow the original query arguments.
+	// PagingArgs follow the original query arguments: Limit+1 and Offset.
 	PagingArgs []any
 
 	// Limit and Offset describe page size and skipped positions.
@@ -164,36 +173,43 @@ type Statements struct {
 	Offset uint
 }
 
-// Build renders the statements for one request.
+// Build renders both statements for one request.
 //
 // The model is the struct the rows decode into, and is only read when the
 // whitelist has to be derived - that is, when a sort was actually requested and
-// Sortable was not given. argc is how many arguments the query itself takes.
+// SortKeyTag is set. argc is how many arguments the query itself takes.
 func (q Query) Build(model reflect.Type, req Request, argc int) (Statements, error) {
 	statements, err := q.BuildRows(model, req, argc)
 	if err != nil {
 		return Statements{}, err
 	}
+
 	statements.Count, err = q.BuildCount()
+
 	return statements, err
 }
 
 // BuildRows renders only the OFFSET/LIMIT page; Count is left empty.
 func (q Query) BuildRows(model reflect.Type, req Request, argc int) (Statements, error) {
-	if err := q.validateArgs(argc, 2); err != nil {
-		return Statements{}, err
+	if len(q.sql) == 0 {
+		return Statements{}, ErrNoSQL
 	}
+
 	limit, offset, err := req.bounds()
 	if err != nil {
 		return Statements{}, err
 	}
+
 	orders, err := q.orders(model, req.Sort)
 	if err != nil {
 		return Statements{}, err
 	}
+
 	return Statements{
 		Rows:       fmt.Sprintf("SELECT * FROM (%s) AS %s ORDER BY %s LIMIT $%d OFFSET $%d", q.sql, alias, renderOrders(orders), argc+1, argc+2),
-		PagingArgs: []any{limit, offset}, Limit: limit, Offset: offset,
+		PagingArgs: []any{limit + 1, offset},
+		Limit:      limit,
+		Offset:     offset,
 	}, nil
 }
 
@@ -203,21 +219,13 @@ func (q Query) BuildCount() (string, error) {
 	if len(q.sql) == 0 {
 		return "", ErrNoSQL
 	}
+
 	counted := q.countSQL
 	if len(counted) == 0 {
 		counted = q.sql
 	}
-	return "SELECT count(*) FROM (" + counted + ") AS " + alias, nil
-}
 
-func (q Query) validateArgs(argc, extra int) error {
-	if len(q.sql) == 0 {
-		return ErrNoSQL
-	}
-	if argc < 0 || argc > math.MaxInt-extra {
-		return ErrInvalidArgumentCount
-	}
-	return nil
+	return "SELECT count(*) FROM (" + counted + ") AS " + alias, nil
 }
 
 // trimSQL strips the trailing semicolon and whitespace: the query becomes a
@@ -230,6 +238,7 @@ func trimSQL(sql string) string {
 	if strings.Contains(sql, "--") {
 		sql += "\n"
 	}
+
 	return sql
 }
 
@@ -248,23 +257,28 @@ type CursorStatement struct {
 // directions use disjoint, individually limited UNION ALL branches.
 // Filter arguments must be JSON-serializable with stable representations.
 func (q Query) BuildAfter(model reflect.Type, req CursorRequest, args ...any) (CursorStatement, error) {
-	if err := q.validateArgs(len(args), maxCursorKeys+1); err != nil {
-		return CursorStatement{}, err
+	if len(q.sql) == 0 {
+		return CursorStatement{}, ErrNoSQL
 	}
+
 	if req.Size == 0 || uint64(req.Size) >= uint64(math.MaxInt64) {
 		return CursorStatement{}, ErrInvalidRequest
 	}
+
 	orders, err := q.orders(model, req.Sort)
 	if err != nil {
 		return CursorStatement{}, err
 	}
+
 	if len(orders) > maxCursorKeys {
 		return CursorStatement{}, ErrInvalidRequest
 	}
+
 	scope, err := cursorScope(q.sql, orders, args)
 	if err != nil {
 		return CursorStatement{}, err
 	}
+
 	var values []any
 	if req.After != "" {
 		values, err = decodeCursor(req.After, scope, len(orders))
@@ -272,8 +286,10 @@ func (q Query) BuildAfter(model reflect.Type, req CursorRequest, args ...any) (C
 			return CursorStatement{}, err
 		}
 	}
+
 	keys, params := prepareCursorKeys(orders, values, args)
 	params = append(params, req.Size+1)
+
 	return CursorStatement{
 		Rows:   q.afterSQL(orders, keys, len(params)),
 		Args:   params,

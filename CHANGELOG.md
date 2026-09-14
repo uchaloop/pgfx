@@ -5,25 +5,27 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] - 2026-09-11
+## [0.8.0] - 2026-09-14
 
 ### Added
 
-- DB/Tx `FetchPageRows` for OFFSET/LIMIT pages without a total, `FetchAfter`
-  for cursor pagination, and `FetchTotal` for a separate filtered count.
-- Cursor request/result types and `Query.BuildRows`, `BuildCount`, `BuildAfter`.
-- GoDoc usage examples, pagination benchmarks and PostgreSQL integration tests.
+- `FetchAfter` for keyset pages with opaque cursors, and `FetchTotal` for a
+  separate count of the base filter.
+- `FetchPageRows` for numbered pages without a count; it reports whether another
+  page follows.
+- `Query.BuildRows`, `BuildCount` and `BuildAfter` for running the statements
+  directly.
 
 ### Changed
 
-- Separate row/count preparation, reduce SQL-building allocations and consolidate
-  internal collectors.
-- Unify documentation with plain Go configuration examples and optional confmaker.
-
-### Fixed
-
-- Reject invalid NULL ordering, conflicting sortable names and invalid argument counts.
-- Preserve trailing SQL line comments when wrapping pagination queries.
+- Client sorting needs an explicit `Sortable` whitelist; `SortKeyTag` opts into
+  deriving it from the model.
+- The tie takes the direction of the order before it, so one composite index
+  serves the whole order.
+- Page statements read one row past the page; `FetchPage` counts only when more
+  rows follow or the page is empty.
+- `Make` rejects an unknown NULL placement and whitelist names that differ only
+  in case.
 
 ## [0.7.0] - 2026-09-03
 

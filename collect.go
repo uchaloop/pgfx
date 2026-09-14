@@ -69,15 +69,15 @@ func collectPage[T any](
 		return nil, 0, err
 	}
 
-	rows, err := collectPageRows[T](ctx, q, statements, args)
+	rows, more, err := collectPageRows[T](ctx, q, statements, args)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// A page shorter than it asked for names the total itself: nothing follows
-	// the rows it returned. An empty page says nothing - it may sit past the end
-	// of a much larger set - and neither does a full one.
-	if n := uint(len(rows)); n > 0 && n < statements.Limit {
+	// A nonempty page with no row after it names the total itself. An empty
+	// page says nothing - it may sit past the end of a much larger set - and
+	// neither does a page that more rows follow.
+	if n := uint(len(rows)); n > 0 && !more {
 		return rows, statements.Offset + n, nil
 	}
 
@@ -101,16 +101,27 @@ func countContext(ctx context.Context) context.Context {
 	return WithQueryName(ctx, name+".count")
 }
 
-// collectPageRows decodes a prepared page without constructing a count query.
-func collectPageRows[T any](ctx context.Context, q querier, statements page.Statements, args []any) ([]T, error) {
-	return collectMany(ctx, q, pgx.RowToStructByNameLax[T], statements.Rows, append(slices.Clip(args), statements.PagingArgs...)...)
+// collectPageRows decodes a prepared page and reports whether another page
+// follows. The statement reads one row past the page, which is not returned.
+func collectPageRows[T any](ctx context.Context, q querier, statements page.Statements, args []any) ([]T, bool, error) {
+	rows, err := collectMany(ctx, q, pgx.RowToStructByNameLax[T], statements.Rows, append(slices.Clip(args), statements.PagingArgs...)...)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if uint(len(rows)) > statements.Limit {
+		return rows[:statements.Limit], true, nil
+	}
+
+	return rows, false, nil
 }
 
-func fetchPageRows[T any](ctx context.Context, q querier, query page.Query, req page.Request, args []any) ([]T, error) {
+func fetchPageRows[T any](ctx context.Context, q querier, query page.Query, req page.Request, args []any) ([]T, bool, error) {
 	statements, err := query.BuildRows(reflect.TypeFor[T](), req, len(args))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+
 	return collectPageRows[T](ctx, q, statements, args)
 }
 

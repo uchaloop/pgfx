@@ -133,9 +133,12 @@ rows decode by the `db` tag like any other:
 ```go
 var warehouses = page.Must(
 	fetchWarehousesSQL,
-	page.Head(page.Desc("is_active")),   // pinned, before the client's sort
-	page.Tie(page.Asc("id")),            // required: a page needs a total order
-	page.SortKeyTag("json"),             // the client sorts by json names
+	page.Head(page.Desc("is_active")), // pinned, before the client's sort
+	page.Tie(page.Asc("id")),          // required: a page needs a total order
+	page.Sortable(page.Cols{           // what a client may sort by
+		"cityEng":   "city_eng",
+		"createdAt": "created_at",
+	}),
 )
 
 rows, total, err := db.FetchPage[Warehouse](
@@ -146,10 +149,20 @@ rows, total, err := db.FetchPage[Warehouse](
 )
 ```
 
-Sortable fields are derived from the model, so they cannot drift away from the
-columns that are actually there, and an unknown one is an error rather than a
-silent skip. The total takes a second statement, skipped whenever the rows
-already imply it - a nonempty page shorter than requested is the last one.
+A client sorts only by what `Sortable` lists, and an unknown field is an error
+rather than a silent skip. List the fields an index serves: a sort without one
+reads and sorts the whole result on every page. `page.SortKeyTag("json")` opens
+every field of the model instead, under its json name - convenient for small
+tables, costly for large ones.
+
+The tie keeps its own direction when it is the whole order, so `Tie(Desc("id"))`
+lists the newest rows first by default. After other orders it takes the
+direction of the last one: `cityEng:desc` gives `ORDER BY city_eng DESC, id DESC`,
+which one index on `(city_eng, id)` serves in a single backward scan.
+
+The rows statement reads one row past the page. The total takes a second
+statement, skipped when a nonempty page has no row after it: that page is the
+last one, and the total follows from it.
 
 Page number and size arrive as a `page.Request`, apart from the filter: a
 default for a page a client did not fully specify belongs at the edge that
@@ -162,11 +175,13 @@ filtered result and matching indexes, not just the table's row count.
 
 ### Pages without a total
 
-When the caller only needs rows, use `FetchPageRows` with the same query and
-request. It executes only the page SELECT, including for full and empty pages:
+Counting is often the most expensive part of a page. When a client needs only
+the rows and a "next" link, use `FetchPageRows` with the same query and request.
+It executes only the page SELECT and tells from the extra row whether another
+page follows:
 
 ```go
-list, err := db.FetchPageRows[Warehouse](
+list, more, err := db.FetchPageRows[Warehouse](
     ctx,
     warehouses,
     page.Request{Number: 2, Size: 20},
@@ -195,7 +210,8 @@ result, err := db.FetchAfter[Warehouse](
 Start with an empty `After`, then pass the returned `NextCursor` while `HasMore`
 is true. The size can change; SQL, filters and effective sorting must remain the
 same. There is no automatic switch between offset and cursor: they provide
-different navigation contracts.
+different navigation contracts. `CursorResult` carries no JSON tags - the shape
+of the response belongs to the API.
 
 Cursor queries fetch at most `Size + 1` result rows and never count. Uniform
 sort directions use a tuple comparison; mixed directions and NULL transitions
@@ -224,12 +240,11 @@ and bound to the query, but are neither signed nor encrypted; enforce access
 filters independently. Concurrent updates to sort keys can move rows between
 pages. A consistent snapshot remains an explicit transaction choice.
 
-`Between`, `OffsetLimit`, `WithPagination` and the row-number helper were removed.
-Remove strategy options from numbered queries; use `FetchAfter` for keyset
-navigation. A custom `WHERE field BETWEEN $1 AND $2` still works with `FetchRows`.
-pgfx is a thin pgx extension and does not integrate search-engine pagination:
-when Elasticsearch/OpenSearch supplies ranked results, paginate there and use
-PostgreSQL to fetch the selected IDs, preserving the search result order.
+A key range such as `WHERE id BETWEEN $1 AND $2` is ordinary SQL for
+`FetchRows`, not a pagination mode. pgfx is a thin pgx extension and does not
+integrate search-engine pagination: when Elasticsearch/OpenSearch supplies
+ranked results, paginate there and use PostgreSQL to fetch the selected IDs,
+preserving the search result order.
 
 ## Transactions
 

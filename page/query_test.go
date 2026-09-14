@@ -60,7 +60,7 @@ func TestMustPanicsOnInvalidQuery(t *testing.T) {
 }
 
 func TestBuildStatements(t *testing.T) {
-	query := Must(selectSQL, Head(Desc("is_active")), Tie(Asc("id")))
+	query := Must(selectSQL, Head(Desc("is_active")), Tie(Asc("id")), Sortable(Cols{"city_eng": "city_eng"}))
 
 	statements := build(t, query, Request{Number: 4, Size: 25, Sort: []string{"city_eng"}}, 1)
 
@@ -78,10 +78,29 @@ func TestBuildStatements(t *testing.T) {
 	if statements.Limit != 25 || statements.Offset != 75 {
 		t.Fatalf("limit = %d, offset = %d, want 25 and 75", statements.Limit, statements.Offset)
 	}
+
+	// The rows statement reads one row past the page.
+	if len(statements.PagingArgs) != 2 || statements.PagingArgs[0] != uint(26) || statements.PagingArgs[1] != uint(75) {
+		t.Fatalf("paging args = %v, want [26 75]", statements.PagingArgs)
+	}
+}
+
+func TestBuildTieFollowsPrecedingDirection(t *testing.T) {
+	query := Must(selectSQL, Tie(Asc("id")), Sortable(Cols{"cityEng": "city_eng"}))
+
+	alone := build(t, query, Request{Number: 1, Size: 10}, 0)
+	if !strings.Contains(alone.Rows, `ORDER BY "id" ASC LIMIT`) {
+		t.Fatalf("rows = %q, want the tie in its own direction", alone.Rows)
+	}
+
+	after := build(t, query, Request{Number: 1, Size: 10, Sort: []string{"cityEng:desc"}}, 0)
+	if !strings.Contains(after.Rows, `ORDER BY "city_eng" DESC, "id" DESC LIMIT`) {
+		t.Fatalf("rows = %q, want the tie to follow city_eng", after.Rows)
+	}
 }
 
 func TestBuildKeepsRequestedDirectionOverTie(t *testing.T) {
-	query := Must(selectSQL, Tie(Asc("id")))
+	query := Must(selectSQL, Tie(Asc("id")), Sortable(Cols{"id": "id"}))
 
 	statements := build(t, query, Request{Number: 1, Size: 10, Sort: []string{"id:desc"}}, 0)
 
@@ -140,15 +159,15 @@ func TestBuildSortIsCaseInsensitive(t *testing.T) {
 func TestBuildRejectsUnknownAndMalformedSort(t *testing.T) {
 	query := Must(selectSQL, Tie(Asc("id")))
 
-	// A field the model does not carry, and one the model carries but Sortable
-	// keeps out of reach.
+	// Without a whitelist no field is sortable, not even one the model carries;
+	// with one, only the fields it lists.
 	narrowed := Must(selectSQL, Tie(Asc("id")), Sortable(Cols{"city_eng": "city_eng"}))
 
 	for _, unknown := range []struct {
 		query Query
 		sort  string
 	}{
-		{query, "password"},
+		{query, "city_eng"},
 		{narrowed, "is_active"},
 	} {
 		req := Request{Number: 1, Size: 10, Sort: []string{unknown.sort}}
@@ -174,6 +193,8 @@ func TestBuildRejectsInvalidRequest(t *testing.T) {
 		"zero number":  {Number: 0, Size: 10},
 		"zero size":    {Number: 1, Size: 0},
 		"offset wraps": {Number: 1 << 62, Size: 1 << 12},
+		// The extra row past the page would not fit LIMIT's bigint.
+		"size too large": {Number: 1, Size: 1<<63 - 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := query.Build(reflect.TypeFor[model](), req, 0); !errors.Is(err, ErrInvalidRequest) {
@@ -193,37 +214,63 @@ func TestBuildWithoutSortNeedsNoModel(t *testing.T) {
 	}
 }
 
-func TestBuildRejectsUninitializedQueryAndArgumentCount(t *testing.T) {
-	req := Request{Number: 1, Size: 20}
-	if _, err := (Query{}).Build(nil, req, 0); !errors.Is(err, ErrNoSQL) {
+func TestBuildRejectsUninitializedQuery(t *testing.T) {
+	if _, err := (Query{}).Build(nil, Request{Number: 1, Size: 20}, 0); !errors.Is(err, ErrNoSQL) {
 		t.Fatalf("zero query: %v", err)
-	}
-	q := Must(selectSQL, Tie(Asc("id")))
-	for _, argc := range []int{-1, int(^uint(0) >> 1)} {
-		if _, err := q.Build(nil, req, argc); err == nil {
-			t.Fatalf("accepted argc %d", argc)
-		}
 	}
 }
 
 func TestCursorMixedUsesDisjointBranches(t *testing.T) {
+	q := Must("SELECT rank,name,id FROM items", Head(Desc("rank")), Tie(Asc("id")), Sortable(Cols{"name": "name"}))
+	req := CursorRequest{Size: 20, Sort: []string{"name"}}
+
+	st, err := q.BuildAfter(nil, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cursor, err := st.Cursor([]any{int64(10), "b", int64(42)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.After = cursor
+	st, err = q.BuildAfter(nil, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// rank DESC followed by name ASC cannot be one row comparison.
+	if !strings.Contains(st.Rows, "UNION ALL") || strings.Contains(st.Rows, " OR ") {
+		t.Fatal(st.Rows)
+	}
+
+	if !strings.Contains(st.Rows, `"rank" = $1 AND "name" > $2`) {
+		t.Fatal(st.Rows)
+	}
+}
+
+func TestCursorTieFollowingDirectionUsesTuple(t *testing.T) {
 	q := Must("SELECT rank,id FROM items", Head(Desc("rank")), Tie(Asc("id")))
+
 	st, err := q.BuildAfter(nil, CursorRequest{Size: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	cursor, err := st.Cursor([]any{int64(10), int64(42)})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	st, err = q.BuildAfter(nil, CursorRequest{Size: 20, After: cursor})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(st.Rows, "UNION ALL") || strings.Contains(st.Rows, " OR ") {
-		t.Fatal(st.Rows)
-	}
-	if !strings.Contains(st.Rows, `"rank" = $1 AND "id" > $2`) {
+
+	// The tie follows rank DESC, so one row comparison seeks an index on
+	// (rank, id) without UNION branches.
+	if strings.Contains(st.Rows, "UNION ALL") || !strings.Contains(st.Rows, `("rank", "id") < ($1, $2)`) {
 		t.Fatal(st.Rows)
 	}
 }
