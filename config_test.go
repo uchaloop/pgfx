@@ -10,6 +10,12 @@ import (
 	"github.com/uchaloop/secret/v2"
 )
 
+func TestConfigNameIsPostgres(t *testing.T) {
+	if got := (Config{}).ConfigName(); got != "postgres" {
+		t.Fatalf("ConfigName() = %q, want postgres", got)
+	}
+}
+
 func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
 	secretType := reflect.TypeOf(secret.Secret{})
 
@@ -18,18 +24,18 @@ func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
 		for i := range typ.NumField() {
 			field := typ.Field(i)
 			fieldPath := field.Name
-			if path != "" {
+			if len(path) != 0 {
 				fieldPath = path + "." + field.Name
 			}
 
 			if field.Type.Kind() == reflect.Struct && field.Type != secretType {
-				if field.Tag.Get("envPrefix") == "" {
+				if len(field.Tag.Get("envPrefix")) == 0 {
 					t.Errorf("%s has no envPrefix tag", fieldPath)
 				}
 				walk(field.Type, fieldPath)
 				continue
 			}
-			if field.Tag.Get("env") == "" {
+			if len(field.Tag.Get("env")) == 0 {
 				t.Errorf("%s has no env tag", fieldPath)
 			}
 		}
