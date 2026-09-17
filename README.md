@@ -94,12 +94,13 @@ manual config construction and `fx.Supply(cfg)`:
 // import "github.com/uchaloop/confmaker/confx"
 fx.New(
     confx.Module(),
-    confx.Provide[pgfx.Config]("postgres"), // POSTGRES_HOST, POSTGRES_DATABASE, ...
+    confx.Provide[pgfx.Config](), // POSTGRES_HOST, POSTGRES_DATABASE, ...
     pgfx.Module,
 ).Run()
 ```
 
-For a named replica, add these options to the same application:
+`Config` names its default instance `postgres`, which gives the `POSTGRES_`
+prefix. For a named replica, add these options to the same application:
 
 ```go
 confx.ProvideNamed[pgfx.Config]("replica"), // REPLICA_HOST, REPLICA_DATABASE, ...
@@ -302,7 +303,7 @@ POSTGRES_TIMEOUTS_CONNECT=5s
 ```
 
 Host and database are required. Unset optional fields retain their documented
-defaults. `confx.Manifest[pgfx.Config]("postgres")` lists the whole set with types
+defaults. `confmaker.Manifest[pgfx.Config]()` lists the whole set with types
 and defaults.
 
 ## Documentation

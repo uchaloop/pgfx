@@ -21,8 +21,9 @@ const defaultPostgresPort uint16 = 5432
 // dependencies (those are passed to [Make] as [Option] values).
 //
 // The `env` tags let a loader fill it from the environment (see
-// confmaker/confx). They are inert strings, so the Config type itself depends
-// only on the standard-library-only github.com/uchaloop/secret/v2 module.
+// github.com/uchaloop/confmaker). They are inert strings, so the Config type
+// itself depends only on the standard-library-only github.com/uchaloop/secret/v2
+// module.
 //
 // Host and Database must be supplied by the deployment. User and Password are
 // optional: when empty they fall back to libpq's defaults (PGUSER / the OS user,
@@ -96,6 +97,11 @@ type TimeoutConfig struct {
 	// default.
 	Connect time.Duration `env:"CONNECT"`
 }
+
+// ConfigName is the default instance name, "postgres": a loader such as
+// confmaker reads POSTGRES_HOST and the rest of POSTGRES_* unless the application
+// names the instance itself.
+func (Config) ConfigName() string { return "postgres" }
 
 // Validate checks what the values mean, once a loader has supplied them: every
 // problem at once, not just the first, so a misconfigured deployment takes one
