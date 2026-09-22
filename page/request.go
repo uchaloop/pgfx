@@ -13,7 +13,8 @@ type Request struct {
 	// Number is the 1-based page number.
 	Number uint
 
-	// Size is how many rows the page holds.
+	// Size is how many rows the page holds. pgfx reserves Size+1 result elements.
+	// Validate an application-specific maximum before fetching.
 	Size uint
 
 	// Sort holds the requested order as "field" or "field:desc", in the names a
@@ -42,6 +43,8 @@ func (r Request) bounds() (limit, offset uint, err error) {
 // CursorRequest selects the next rows after a previous response. An empty After
 // starts a traversal. Size must be positive; it may change between requests.
 type CursorRequest struct {
+	// Size is the page size and initial result capacity in pgfx.
+	// Validate an application-specific maximum before fetching.
 	Size  uint
 	After string
 	Sort  []string

@@ -56,11 +56,13 @@ func makeConnection(
 	queryMetrics QueryMetricFunc,
 ) (*DB, error) {
 	var opts []Option
+
 	// Tracing is opt-in: enable otelpgx spans only when a TracerProvider is
 	// supplied to the container.
 	if tracerProvider != nil {
 		opts = append(opts, WithTracing(otelpgx.WithTracerProvider(tracerProvider)))
 	}
+
 	if queryMetrics != nil {
 		opts = append(opts, WithQueryMetrics(queryMetrics))
 	}

@@ -17,8 +17,10 @@ const (
 	// KindQuery is a single query - Query, QueryRow or Exec. It is the zero
 	// value, so a metric that says nothing about its kind is a query.
 	KindQuery QueryKind = iota
+
 	// KindBatch is one SendBatch operation, including reading its results.
 	KindBatch
+
 	// KindCopyFrom is one CopyFrom.
 	KindCopyFrom
 )
@@ -42,24 +44,29 @@ type QueryMetric struct {
 	// Kind is what was observed: a query, a batch or a copy. Use it as a metric
 	// label - it is bounded - to keep the three apart.
 	Kind QueryKind
+
 	// Name is the bounded label from WithQueryName ("" if unset) - use it as the
 	// metric label, never SQL (raw statements have unbounded cardinality).
 	Name string
+
 	// SQL is the raw statement when explicitly enabled with WithSQLInQueryMetrics;
 	// otherwise it is empty. For a batch it is every queued statement joined with
 	// "; " before query rewriting, including statements that may not execute.
 	// For a copy it is empty. Arguments are not interpolated. Do NOT use it as a
 	// metric label, and scrub it before recording; batches can produce long text.
 	SQL string
+
 	// Duration is elapsed time between pgx start/end hooks, not server execution
 	// or network latency. It excludes pool acquisition and includes preparation,
 	// result consumption (including delays before BatchResults.Close), and COPY
 	// source production as applicable. Always close batch results.
 	Duration time.Duration
+
 	// RowsAffected is the number of rows affected or returned as reported by pgx,
 	// summed over observed batch command tags. It can be partial on error and
 	// does not indicate committed changes: the transaction may roll back.
 	RowsAffected int64
+
 	// Err is non-nil when the operation failed. For a batch it is the error the
 	// batch ended with, or the first statement error when the batch itself
 	// reported none.
@@ -195,6 +202,7 @@ func (t metricsTracer) TraceBatchEnd(
 	if !ok || start.ended {
 		return
 	}
+
 	// pgx can end a batch on a SendBatch early error and again on Close.
 	// Mark it before invoking user code, including in case that code panics.
 	start.ended = true
@@ -249,6 +257,7 @@ func batchSQL(batch *pgx.Batch) string {
 	}
 
 	statements := make([]string, 0, len(batch.QueuedQueries))
+
 	for _, queued := range batch.QueuedQueries {
 		statements = append(statements, queued.SQL)
 	}

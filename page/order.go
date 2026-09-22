@@ -17,8 +17,10 @@ type Nulls uint8
 const (
 	// NullsDefault leaves NULL placement to Postgres.
 	NullsDefault Nulls = iota
+
 	// NullsFirst puts NULLs before every other value.
 	NullsFirst
+
 	// NullsLast puts NULLs after every other value.
 	NullsLast
 )
@@ -50,6 +52,7 @@ func (o Order) validate() error {
 	if o.Nulls > NullsLast {
 		return ErrInvalidNulls
 	}
+
 	if len(o.Column) == 0 || strings.ContainsRune(o.Column, 0) {
 		return fmt.Errorf("%w: %q", ErrInvalidColumn, o.Column)
 	}
@@ -65,6 +68,7 @@ func (o Order) writeSQL(b *strings.Builder) {
 	} else {
 		b.WriteString(" ASC")
 	}
+
 	switch o.Nulls {
 	case NullsFirst:
 		b.WriteString(" NULLS FIRST")
@@ -116,12 +120,15 @@ func (q Query) orders(model reflect.Type, sort []string) ([]Order, error) {
 
 func renderOrders(orders []Order) string {
 	var sql strings.Builder
+
 	for i, order := range orders {
 		if i > 0 {
 			sql.WriteString(", ")
 		}
+
 		order.writeSQL(&sql)
 	}
+
 	return sql.String()
 }
 

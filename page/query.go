@@ -135,6 +135,7 @@ func Make(sql string, opts ...Option) (Query, error) {
 			if previous, ok := sortable[key]; ok && previous != column {
 				return Query{}, fmt.Errorf("%w: %q", ErrAmbiguousSortField, field)
 			}
+
 			sortable[key] = column
 		}
 
@@ -232,6 +233,7 @@ func (q Query) BuildCount() (string, error) {
 // subquery, and a statement terminator inside one is a syntax error.
 func trimSQL(sql string) string {
 	sql = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(sql), ";"))
+
 	// Preserve a line boundary before the wrapper's closing parenthesis. Without
 	// it, a trailing SQL line comment consumes the rest of the generated query.
 	// A newline is harmless when the marker occurs inside a quoted value.
@@ -309,7 +311,9 @@ type cursorKey struct {
 func prepareCursorKeys(orders []Order, values, args []any) ([]cursorKey, []any) {
 	params := make([]any, len(args), len(args)+len(values)+1)
 	copy(params, args)
+
 	keys := make([]cursorKey, len(values))
+
 	for i, value := range values {
 		keys[i] = cursorKey{order: orders[i], column: quoteIdent(orders[i].Column)}
 		if value != nil {
@@ -317,6 +321,7 @@ func prepareCursorKeys(orders []Order, values, args []any) ([]cursorKey, []any) 
 			keys[i].parameter = fmt.Sprintf("$%d", len(params))
 		}
 	}
+
 	return keys, params
 }
 
@@ -327,24 +332,31 @@ func (q Query) afterSQL(orders []Order, keys []cursorKey, limitPosition int) str
 	if len(keys) == 0 {
 		return selectSQL + suffix
 	}
+
 	predicates := afterPredicates(keys)
+
 	switch len(predicates) {
 	case 0:
 		return selectSQL + " WHERE FALSE" + suffix
 	case 1:
 		return selectSQL + " WHERE " + predicates[0] + suffix
 	}
+
 	var sql strings.Builder
 	size := len("SELECT * FROM () AS pgfx_after") + len(suffix) + (len(predicates)-1)*len(" UNION ALL ")
+
 	for _, predicate := range predicates {
 		size += len(selectSQL) + len(" WHERE ") + len(predicate) + len(suffix) + 2
 	}
+
 	sql.Grow(size)
 	sql.WriteString("SELECT * FROM (")
+
 	for i, predicate := range predicates {
 		if i > 0 {
 			sql.WriteString(" UNION ALL ")
 		}
+
 		sql.WriteByte('(')
 		sql.WriteString(selectSQL)
 		sql.WriteString(" WHERE ")
@@ -352,8 +364,10 @@ func (q Query) afterSQL(orders []Order, keys []cursorKey, limitPosition int) str
 		sql.WriteString(suffix)
 		sql.WriteByte(')')
 	}
+
 	sql.WriteString(") AS pgfx_after")
 	sql.WriteString(suffix)
+
 	return sql.String()
 }
 
@@ -363,35 +377,47 @@ func nullsFirst(order Order) bool {
 
 func afterPredicates(keys []cursorKey) []string {
 	tuple := true
+
 	for _, key := range keys {
 		if key.order.Desc != keys[0].order.Desc || key.parameter == "" {
 			tuple = false
+
 			break
 		}
 	}
+
 	predicates := make([]string, 0, len(keys)+1)
+
 	// Tuple comparison seeks uniform non-NULL keys. Separate disjoint branches
 	// handle NULL-last transitions omitted by SQL's UNKNOWN comparison.
 	if tuple {
 		predicates = append(predicates, tuplePredicate(keys))
 	}
+
 	prefix := ""
+
 	for _, key := range keys {
 		if key.parameter == "" {
 			if nullsFirst(key.order) {
 				predicates = append(predicates, prefix+key.column+" IS NOT NULL")
 			}
+
 			prefix += key.column + " IS NULL AND "
+
 			continue
 		}
+
 		if !tuple {
 			predicates = append(predicates, prefix+key.column+comparison(key.order)+key.parameter)
 		}
+
 		if !nullsFirst(key.order) {
 			predicates = append(predicates, prefix+key.column+" IS NULL")
 		}
+
 		prefix += key.column + " = " + key.parameter + " AND "
 	}
+
 	return predicates
 }
 
@@ -399,6 +425,7 @@ func comparison(order Order) string {
 	if order.Desc {
 		return " < "
 	}
+
 	return " > "
 }
 
@@ -406,23 +433,31 @@ func tuplePredicate(keys []cursorKey) string {
 	if len(keys) == 1 {
 		return keys[0].column + comparison(keys[0].order) + keys[0].parameter
 	}
+
 	var sql strings.Builder
 	sql.WriteByte('(')
+
 	for i, key := range keys {
 		if i > 0 {
 			sql.WriteString(", ")
 		}
+
 		sql.WriteString(key.column)
 	}
+
 	sql.WriteByte(')')
 	sql.WriteString(comparison(keys[0].order))
 	sql.WriteByte('(')
+
 	for i, key := range keys {
 		if i > 0 {
 			sql.WriteString(", ")
 		}
+
 		sql.WriteString(key.parameter)
 	}
+
 	sql.WriteByte(')')
+
 	return sql.String()
 }

@@ -1,5 +1,6 @@
+<!--suppress HtmlDeprecatedAttribute -->
 <p align="center">
-  <img src="logo.png" alt="pgfx" width="320">
+  <img src="logo.svg" alt="pgfx — Go gopher peeking over an elephant" width="320">
 </p>
 
 <p align="center">
@@ -87,11 +88,12 @@ not registered separately.
 ### Optional: confmaker
 
 For convenient environment loading and Fx integration, we recommend
-[confmaker](https://github.com/uchaloop/confmaker). Its `confx` package can replace
+[confmaker](https://github.com/uchaloop/confmaker) and the independent
+[confx](https://github.com/uchaloop/confx) adapter. `confx` can replace
 manual config construction and `fx.Supply(cfg)`:
 
 ```go
-// import "github.com/uchaloop/confmaker/confx"
+// import "github.com/uchaloop/confx"
 fx.New(
     confx.Module(),
     confx.Provide[pgfx.Config](), // POSTGRES_HOST, POSTGRES_DATABASE, ...
@@ -123,6 +125,33 @@ total, err := db.FetchValue[int64](ctx, `SELECT count(*) FROM orders`)
 `FetchValues` and `FetchValue` decode a single column into a scalar. The type to
 decode into is an explicit type argument, because nothing in the arguments
 implies it.
+
+## Result capacity
+
+`FetchRowsInto` and `FetchValuesInto` append to a caller-provided slice on both
+`DB` and `Tx`. The element type is inferred from the slice:
+
+```go
+items, err := db.FetchRowsInto(ctx, make([]Item, 0, 1000), query, args...)
+ids, err := db.FetchValuesInto(ctx, make([]int64, 0, 100), idQuery, args...)
+```
+
+Existing elements are preserved. Pass `items[:0]` to reuse a buffer only after
+its previous consumers have finished. Always use the returned slice: appending
+may allocate a new backing array. Capacity does not limit the number of rows.
+An error returns nil, but the supplied backing array may already contain writes.
+The ordinary `FetchRows` and `FetchValues` helpers remain available without a buffer.
+
+Pagination reserves `Size + 1` elements for offset pages (including the lookahead
+row) and `Size` for cursor pages, including empty results. The application must
+validate the maximum page size before calling these helpers; pgfx applies no
+hidden capacity cap. Large reservations consume memory even for sparse pages.
+
+> Benchmark observation: an experimental initial capacity cap of 256 reduced
+> allocation counts but increased total allocated bytes for a 1000-row page in
+> our Go 1.27 / arm64 struct-row benchmark. This is workload-dependent, not a
+> recommended limit. Measure representative row types and page sizes with
+> `go test -run '^$' -bench BenchmarkCollectPageRowsCapacity -benchmem`.
 
 ## Pagination
 

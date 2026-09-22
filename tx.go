@@ -26,6 +26,22 @@ func (t *Tx) FetchRows[T any](ctx context.Context, sql string, args ...any) ([]T
 	return collectMany(ctx, t.Tx, pgx.RowToStructByNameLax[T], sql, args...)
 }
 
+// FetchRowsInto appends struct rows to dst. Pass dst[:0] to reuse its buffer.
+// Capacity is a reservation, not a row limit; the slice grows as needed.
+// On error it returns nil; appended values may already have modified dst's
+// backing array. Do not reuse that array while another consumer is reading it.
+func (t *Tx) FetchRowsInto[T any](ctx context.Context, dst []T, sql string, args ...any) ([]T, error) {
+	return collectInto(ctx, t.Tx, dst, pgx.RowToStructByNameLax[T], sql, args...)
+}
+
+// FetchValuesInto appends single-column values to dst. Pass dst[:0] to reuse its buffer.
+// Capacity is a reservation, not a row limit; the slice grows as needed.
+// On error it returns nil; appended values may already have modified dst's
+// backing array. Do not reuse that array while another consumer is reading it.
+func (t *Tx) FetchValuesInto[T any](ctx context.Context, dst []T, sql string, args ...any) ([]T, error) {
+	return collectInto(ctx, t.Tx, dst, pgx.RowTo[T], sql, args...)
+}
+
 // FetchRow runs the query and decodes exactly one struct row into T. It reports
 // pgx.ErrNoRows when the query yields no rows and pgx.ErrTooManyRows when it
 // yields more than one. For a scalar result use FetchValue.
