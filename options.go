@@ -26,6 +26,7 @@ type Option func(*options)
 
 func makeOptions(opts ...Option) *options {
 	o := &options{}
+
 	for _, opt := range opts {
 		if opt != nil {
 			opt(o)
@@ -45,9 +46,11 @@ func (o *options) buildTracer() pgx.QueryTracer {
 	if o.tracing {
 		tracers = append(tracers, otelpgx.NewTracer(o.tracingOptions...))
 	}
+
 	if o.tracer != nil {
 		tracers = append(tracers, o.tracer)
 	}
+
 	if o.queryMetrics != nil {
 		tracers = append(tracers, metricsTracer{
 			fn:         o.queryMetrics,

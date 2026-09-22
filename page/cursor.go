@@ -15,6 +15,7 @@ type cursorValue struct {
 	Kind string          `json:"t"`
 	Data json.RawMessage `json:"v"`
 }
+
 type cursorToken struct {
 	Version int           `json:"v"`
 	Scope   string        `json:"s"`
@@ -30,27 +31,34 @@ func (s CursorStatement) Cursor(keys []any) (string, error) {
 	if s.scope == "" || len(keys) != len(s.Orders) {
 		return "", ErrInvalidCursor
 	}
+
 	token := cursorToken{Version: 1, Scope: s.scope, Keys: make([]cursorValue, len(keys))}
+
 	for i, key := range keys {
 		encoded, err := encodeValue(key)
 		if err != nil {
 			return "", err
 		}
+
 		token.Keys[i] = encoded
 	}
+
 	raw, err := json.Marshal(token)
 	if err != nil {
 		return "", err
 	}
+
 	result := base64.RawURLEncoding.EncodeToString(raw)
 	if len(result) > maxCursorBytes {
 		return "", ErrInvalidCursor
 	}
+
 	return result, nil
 }
 
 func encodeValue(value any) (cursorValue, error) {
 	var kind string
+
 	switch value.(type) {
 	case nil:
 		kind = "null"
@@ -91,10 +99,12 @@ func encodeValue(value any) (cursorValue, error) {
 	default:
 		return cursorValue{}, fmt.Errorf("%w: %T", ErrCursorValue, value)
 	}
+
 	data, err := json.Marshal(value)
 	if err != nil {
 		return cursorValue{}, fmt.Errorf("%w: %v", ErrCursorValue, err)
 	}
+
 	return cursorValue{Kind: kind, Data: data}, nil
 }
 
@@ -102,30 +112,38 @@ func decodeCursor(text, scope string, count int) ([]any, error) {
 	if len(text) > maxCursorBytes {
 		return nil, ErrInvalidCursor
 	}
+
 	raw, err := base64.RawURLEncoding.DecodeString(text)
 	if err != nil {
 		return nil, ErrInvalidCursor
 	}
+
 	var token cursorToken
 	if json.Unmarshal(raw, &token) != nil || token.Version != 1 || token.Scope != scope || len(token.Keys) != count {
 		return nil, ErrInvalidCursor
 	}
+
 	keys := make([]any, count)
+
 	for i, key := range token.Keys {
 		if key.Kind == "null" {
 			if string(key.Data) != "null" {
 				return nil, ErrInvalidCursor
 			}
+
 			continue
 		}
+
 		if string(key.Data) == "null" {
 			return nil, ErrInvalidCursor
 		}
+
 		keys[i], err = decodeValue(key)
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	return keys, nil
 }
 
@@ -175,6 +193,7 @@ func decodeJSON[T any](data json.RawMessage) (T, error) {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return value, ErrInvalidCursor
 	}
+
 	return value, nil
 }
 
@@ -189,6 +208,8 @@ func cursorScope(sql string, orders []Order, args []any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: filter arguments: %v", ErrCursorValue, err)
 	}
+
 	hash := sha256.Sum256(raw)
+
 	return hex.EncodeToString(hash[:]), nil
 }

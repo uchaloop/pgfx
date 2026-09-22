@@ -33,20 +33,26 @@ type Config struct {
 	// when omitted, 5432 applies. IPv6 with a port must be bracketed
 	// ("[::1]:5433").
 	Host string `env:"HOST,notEmpty"`
+
 	// Database is the PostgreSQL database name.
 	Database string `env:"DATABASE,notEmpty"`
+
 	// User is the PostgreSQL role. When empty, libpq selects its default.
 	User string `env:"USER"`
+
 	// Password holds the application-supplied secret. When empty, libpq may use
 	// PGPASSWORD or .pgpass.
 	Password secret.Secret `env:"PASSWORD"`
+
 	// AppName is reported as application_name in pg_stat_activity.
 	AppName string `env:"APP_NAME"`
 
 	// TLS configures libpq transport security.
 	TLS TLSConfig `envPrefix:"TLS_"`
+
 	// Pool configures pgxpool sizing and connection lifetimes.
 	Pool PoolConfig `envPrefix:"POOL_"`
+
 	// Timeouts configures connection timeouts.
 	Timeouts TimeoutConfig `envPrefix:"TIMEOUTS_"`
 }
@@ -60,12 +66,16 @@ type TLSConfig struct {
 	// server certificate; "require" encrypts but still does not verify it. Use
 	// "verify-full" with RootCert for MITM protection.
 	Mode string `env:"MODE"`
+
 	// Cert is the path to the client certificate.
 	Cert string `env:"CERT"`
+
 	// Key is the path to the client private key.
 	Key string `env:"KEY"`
+
 	// RootCert is the path to the trusted root certificate.
 	RootCert string `env:"ROOT_CERT"`
+
 	// ServerName overrides the TLS server name used for verification.
 	ServerName string `env:"SERVER_NAME"`
 }
@@ -75,18 +85,24 @@ type TLSConfig struct {
 type PoolConfig struct {
 	// MaxConns is the maximum pool size.
 	MaxConns int32 `env:"MAX_CONNS"`
+
 	// MinConns is the minimum number of connections maintained by the pool.
 	MinConns int32 `env:"MIN_CONNS"`
+
 	// MinIdleConns is the minimum number of idle connections maintained by the
 	// pool.
 	MinIdleConns int32 `env:"MIN_IDLE_CONNS"`
+
 	// MaxConnLifetime is the maximum lifetime of a connection.
 	MaxConnLifetime time.Duration `env:"MAX_CONN_LIFETIME"`
+
 	// MaxConnLifetimeJitter randomizes connection expiry to avoid synchronized
 	// reconnects.
 	MaxConnLifetimeJitter time.Duration `env:"MAX_CONN_LIFETIME_JITTER"`
+
 	// MaxConnIdleTime is the maximum time a connection may remain idle.
 	MaxConnIdleTime time.Duration `env:"MAX_CONN_IDLE_TIME"`
+
 	// HealthPeriod controls how often pgxpool checks idle connections.
 	HealthPeriod time.Duration `env:"HEALTH_PERIOD"`
 }
@@ -120,6 +136,7 @@ func (cfg Config) Validate() error {
 	}
 
 	errs.Require(len(cfg.Database) != 0, "database is required")
+
 	// User and Password are optional: when empty they fall back to libpq's
 	// defaults (PGUSER / the OS user, and PGPASSWORD / .pgpass), so peer auth and
 	// passwordless connections work. See poolConfig, which only overrides them
@@ -148,6 +165,7 @@ func resolveEndpoint(endpoint string) (string, uint16, error) {
 	if !strings.Contains(endpoint, ":") {
 		return endpoint, defaultPostgresPort, nil
 	}
+
 	if net.ParseIP(endpoint) != nil {
 		return endpoint, defaultPostgresPort, nil
 	}
@@ -156,6 +174,7 @@ func resolveEndpoint(endpoint string) (string, uint16, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid endpoint %q: %w", endpoint, err)
 	}
+
 	if len(host) == 0 {
 		return "", 0, fmt.Errorf("missing host in %q", endpoint)
 	}
@@ -180,15 +199,19 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 		"host=" + quoteDSN(host),
 		"port=" + strconv.FormatUint(uint64(port), 10),
 	}
+
 	if len(cfg.TLS.Mode) > 0 {
 		parts = append(parts, "sslmode="+quoteDSN(cfg.TLS.Mode))
 	}
+
 	if len(cfg.TLS.Cert) > 0 {
 		parts = append(parts, "sslcert="+quoteDSN(cfg.TLS.Cert))
 	}
+
 	if len(cfg.TLS.Key) > 0 {
 		parts = append(parts, "sslkey="+quoteDSN(cfg.TLS.Key))
 	}
+
 	if len(cfg.TLS.RootCert) > 0 {
 		parts = append(parts, "sslrootcert="+quoteDSN(cfg.TLS.RootCert))
 	}
@@ -201,12 +224,14 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 	poolCfg.ConnConfig.Host = host
 	poolCfg.ConnConfig.Port = port
 	poolCfg.ConnConfig.Database = cfg.Database
+
 	// User and Password are optional: override the value ParseConfig derived from
 	// libpq's defaults (PGUSER / OS user, PGPASSWORD / .pgpass) only when set, so
 	// peer auth and passwordless connections keep working.
 	if len(cfg.User) > 0 {
 		poolCfg.ConnConfig.User = cfg.User
 	}
+
 	if password := cfg.Password.Reveal(); len(password) > 0 {
 		poolCfg.ConnConfig.Password = password
 	}
@@ -214,10 +239,12 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 	if cfg.Timeouts.Connect > 0 {
 		poolCfg.ConnConfig.ConnectTimeout = cfg.Timeouts.Connect
 	}
+
 	if len(cfg.TLS.ServerName) > 0 && poolCfg.ConnConfig.TLSConfig != nil {
 		poolCfg.ConnConfig.TLSConfig = poolCfg.ConnConfig.TLSConfig.Clone()
 		poolCfg.ConnConfig.TLSConfig.ServerName = cfg.TLS.ServerName
 	}
+
 	if len(cfg.AppName) > 0 {
 		if poolCfg.ConnConfig.RuntimeParams == nil {
 			poolCfg.ConnConfig.RuntimeParams = make(map[string]string)
@@ -243,21 +270,27 @@ func applyPoolLimits(poolCfg *pgxpool.Config, pool PoolConfig) {
 	if pool.MaxConns > 0 {
 		poolCfg.MaxConns = pool.MaxConns
 	}
+
 	if pool.MinConns > 0 {
 		poolCfg.MinConns = pool.MinConns
 	}
+
 	if pool.MinIdleConns > 0 {
 		poolCfg.MinIdleConns = pool.MinIdleConns
 	}
+
 	if pool.MaxConnLifetime > 0 {
 		poolCfg.MaxConnLifetime = pool.MaxConnLifetime
 	}
+
 	if pool.MaxConnLifetimeJitter > 0 {
 		poolCfg.MaxConnLifetimeJitter = pool.MaxConnLifetimeJitter
 	}
+
 	if pool.MaxConnIdleTime > 0 {
 		poolCfg.MaxConnIdleTime = pool.MaxConnIdleTime
 	}
+
 	if pool.HealthPeriod > 0 {
 		poolCfg.HealthCheckPeriod = pool.HealthPeriod
 	}

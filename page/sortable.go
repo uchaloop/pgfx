@@ -62,6 +62,7 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 		}
 
 		embedded := field.Type
+
 		for embedded.Kind() == reflect.Pointer {
 			embedded = embedded.Elem()
 		}
@@ -97,8 +98,10 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 		if previous, ok := sortable[key]; ok && previous != column {
 			return fmt.Errorf("%w: %q", ErrAmbiguousSortField, name)
 		}
+
 		sortable[key] = column
 	}
+
 	return nil
 }
 

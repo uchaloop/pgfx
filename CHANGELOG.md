@@ -5,6 +5,19 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-22
+
+### Added
+
+- `FetchRowsInto` and `FetchValuesInto` on `DB` and `Tx` append results to
+  caller-owned slices, supporting explicit capacity and buffer reuse.
+
+### Changed
+
+- Pagination reserves capacity from the requested size: `Size + 1` for offset
+  pages and `Size` for cursor pages. The application controls the maximum size.
+- Improve code spacing, document allocation behavior and use an SVG README logo.
+
 ## [0.8.1] - 2026-09-17
 
 ### Added
@@ -189,6 +202,7 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
+[0.9.0]: https://github.com/uchaloop/pgfx/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/uchaloop/pgfx/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/uchaloop/pgfx/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/uchaloop/pgfx/compare/v0.6.0...v0.7.0

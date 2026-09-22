@@ -37,6 +37,13 @@ to field names. JSON/JSONB columns use pgx codecs, including map fields.
 [DB.FetchValues] and [DB.FetchValue] decode a single column into scalar values.
 The same methods are available on Tx.
 
+[DB.FetchRowsInto] and [DB.FetchValuesInto] append to a caller-provided slice,
+preserving existing elements and growing its capacity when necessary. Pass a
+zero-length slice with capacity to reserve memory, or dst[:0] to reuse a buffer
+once its previous consumers have finished. Always use the returned slice. Errors
+return nil but may leave writes in the supplied backing array. The same methods
+are available on Tx.
+
 Singular fetches require exactly one row and return pgx.ErrNoRows or
 pgx.ErrTooManyRows otherwise. Plural fetches accept an empty result. Use
 FetchValue for a single-column INSERT or UPDATE with RETURNING, and FetchRow
@@ -60,6 +67,10 @@ HasMore. It seeks after the last returned sort keys and fetches one extra row;
 it never counts. [DB.FetchTotal] explicitly counts the base filter independently.
 These methods are also available on Tx. Prefer offset for shallow numbered
 pages and cursor for sequential traversal of large results with matching indexes.
+
+Offset fetches reserve Size+1 elements, including the lookahead row; cursor
+fetches reserve Size. This also reserves memory for empty pages. The application
+must validate an appropriate maximum page size; there is no internal capacity cap.
 
 Cursor keys must be selected output columns. Tokens bind SQL, sort and filter
 arguments, which must have stable JSON representations. Tokens are not signed

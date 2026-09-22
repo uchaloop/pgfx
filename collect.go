@@ -33,6 +33,16 @@ func collectMany[T any](
 	return pgx.CollectRows(rows, scan)
 }
 
+// collectInto appends decoded rows to dst, preserving the caller's capacity.
+func collectInto[T any](ctx context.Context, q querier, dst []T, scan pgx.RowToFunc[T], sql string, args ...any) ([]T, error) {
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.AppendRows(dst, rows, scan)
+}
+
 // collectOne runs the query on q and collects exactly one row with scan.
 //
 // The no-rows error is passed through as pgx reports it. pgx.ErrNoRows wraps
@@ -104,7 +114,12 @@ func countContext(ctx context.Context) context.Context {
 // collectPageRows decodes a prepared page and reports whether another page
 // follows. The statement reads one row past the page, which is not returned.
 func collectPageRows[T any](ctx context.Context, q querier, statements page.Statements, args []any) ([]T, bool, error) {
-	rows, err := collectMany(ctx, q, pgx.RowToStructByNameLax[T], statements.Rows, append(slices.Clip(args), statements.PagingArgs...)...)
+	resultRows, err := q.Query(ctx, statements.Rows, append(slices.Clip(args), statements.PagingArgs...)...)
+	if err != nil {
+		return nil, false, err
+	}
+
+	rows, err := pgx.AppendRows(make([]T, 0, statements.Limit+1), resultRows, pgx.RowToStructByNameLax[T])
 	if err != nil {
 		return nil, false, err
 	}
@@ -130,6 +145,7 @@ func collectTotal(ctx context.Context, q querier, query page.Query, args []any) 
 	if err != nil {
 		return 0, err
 	}
+
 	return collectOne(countContext(ctx), q, pgx.RowTo[uint], sql, args...)
 }
 
@@ -138,26 +154,33 @@ func collectAfter[T any](ctx context.Context, q querier, query page.Query, req p
 	if err != nil {
 		return page.CursorResult[T]{}, err
 	}
+
 	rows, err := q.Query(ctx, st.Rows, st.Args...)
 	if err != nil {
 		return page.CursorResult[T]{}, err
 	}
 	defer rows.Close()
+
 	keyReader, err := newCursorKeyReader(rows.FieldDescriptions(), st.Orders)
 	if err != nil {
 		return page.CursorResult[T]{}, err
 	}
-	result := page.CursorResult[T]{List: make([]T, 0, min(req.Size, 256))}
+
+	result := page.CursorResult[T]{List: make([]T, 0, req.Size)}
 	var keys []any
+
 	for rows.Next() {
 		if uint(len(result.List)) == req.Size {
 			result.HasMore = true
+
 			break
 		}
+
 		item, err := pgx.RowToStructByNameLax[T](rows)
 		if err != nil {
 			return page.CursorResult[T]{}, err
 		}
+
 		result.List = append(result.List, item)
 		if uint(len(result.List)) == req.Size {
 			keys, err = keyReader.read(rows)
@@ -166,16 +189,19 @@ func collectAfter[T any](ctx context.Context, q querier, query page.Query, req p
 			}
 		}
 	}
+
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return page.CursorResult[T]{}, err
 	}
+
 	if result.HasMore {
 		result.NextCursor, err = st.Cursor(keys)
 		if err != nil {
 			return page.CursorResult[T]{}, err
 		}
 	}
+
 	return result, nil
 }
 
@@ -188,38 +214,48 @@ type cursorKeyReader struct {
 
 func newCursorKeyReader(fields []pgconn.FieldDescription, orders []page.Order) (cursorKeyReader, error) {
 	reader := cursorKeyReader{positions: make([]int, len(orders)), columnCount: len(fields)}
+
 	for i, order := range orders {
 		reader.positions[i] = -1
+
 		for j, field := range fields {
 			if field.Name != order.Column {
 				continue
 			}
+
 			if reader.positions[i] != -1 {
 				return cursorKeyReader{}, fmt.Errorf("%w: duplicate column %q", page.ErrInvalidColumn, order.Column)
 			}
+
 			reader.positions[i] = j
 		}
+
 		if reader.positions[i] == -1 {
 			return cursorKeyReader{}, fmt.Errorf("%w: missing column %q", page.ErrInvalidColumn, order.Column)
 		}
 	}
+
 	return reader, nil
 }
 
 func (r cursorKeyReader) read(rows pgx.Rows) ([]any, error) {
 	keys := make([]any, len(r.positions))
 	dest := make([]any, r.columnCount)
+
 	for i, pos := range r.positions {
 		dest[pos] = &keys[i]
 	}
+
 	if err := rows.Scan(dest...); err != nil {
 		return nil, err
 	}
+
 	// Detach byte keys before Next can invalidate a custom codec's row buffer.
 	for i, key := range keys {
 		if value, ok := key.([]byte); ok {
 			keys[i] = slices.Clone(value)
 		}
 	}
+
 	return keys, nil
 }

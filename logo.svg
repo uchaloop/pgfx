@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254">
+  <rect width="1254" height="1254" fill="#fff"/>
+
+  <g transform="translate(67 40) scale(1.6)" stroke="#0B1F3A" stroke-width="22" stroke-linejoin="round" stroke-linecap="round">
+    <!-- gopher behind the elephant's head -->
+    <g transform="translate(350 175) scale(.52)">
+      <circle cx="-165" cy="-175" r="58" fill="#3DDCFF"/>
+      <circle cx="-165" cy="-175" r="28" fill="#06A6D6" stroke="none"/>
+      <circle cx="165" cy="-175" r="58" fill="#3DDCFF"/>
+      <circle cx="165" cy="-175" r="28" fill="#06A6D6" stroke="none"/>
+      <path d="M-220 0 A220 220 0 0 1 220 0 V300 H-220 Z" fill="#3DDCFF"/>
+      <path d="M-150 -120 A170 170 0 0 1 -30 -185" fill="none" stroke="#9BF0FF" stroke-width="18" opacity=".8"/>
+      <circle cx="-85" cy="-40" r="78" fill="#fff" stroke-width="18"/>
+      <circle cx="90" cy="-40" r="78" fill="#fff" stroke-width="18"/>
+      <circle cx="-65" cy="-30" r="30" fill="#0B1F3A" stroke="none"/>
+      <circle cx="110" cy="-30" r="30" fill="#0B1F3A" stroke="none"/>
+      <circle cx="-55" cy="-43" r="10" fill="#fff" stroke="none"/>
+      <circle cx="120" cy="-43" r="10" fill="#fff" stroke="none"/>
+      <rect x="-24" y="75" width="25" height="58" rx="6" fill="#fff" stroke-width="10"/>
+      <rect x="3" y="75" width="25" height="58" rx="6" fill="#fff" stroke-width="10"/>
+      <ellipse cx="2" cy="60" rx="56" ry="36" fill="#F6C99A" stroke-width="14"/>
+      <ellipse cx="2" cy="39" rx="26" ry="17" fill="#0B1F3A" stroke="none"/>
+    </g>
+
+    <!-- elephant: ears, head -->
+    <ellipse cx="170" cy="440" rx="130" ry="160" fill="#5B8FD0"/>
+    <ellipse cx="182" cy="448" rx="74" ry="104" fill="#3E6FB0" stroke="none"/>
+    <ellipse cx="530" cy="440" rx="130" ry="160" fill="#5B8FD0"/>
+    <ellipse cx="518" cy="448" rx="74" ry="104" fill="#3E6FB0" stroke="none"/>
+    <circle cx="350" cy="430" r="190" fill="#5B8FD0"/>
+    <path d="M215 370 A150 150 0 0 1 270 300" fill="none" stroke="#8FB6E6" stroke-width="16" opacity=".9"/>
+
+    <!-- eyes -->
+    <circle cx="285" cy="440" r="19" fill="#0B1F3A" stroke="none"/>
+    <circle cx="415" cy="440" r="19" fill="#0B1F3A" stroke="none"/>
+    <circle cx="291" cy="433" r="6" fill="#fff" stroke="none"/>
+    <circle cx="421" cy="433" r="6" fill="#fff" stroke="none"/>
+
+    <!-- tusks, behind the trunk -->
+    <path d="M292 548 q-8 38 22 58" fill="none" stroke-width="36"/>
+    <path d="M292 548 q-8 38 22 58" fill="none" stroke="#fff" stroke-width="14"/>
+    <path d="M408 548 q8 38 -22 58" fill="none" stroke-width="36"/>
+    <path d="M408 548 q8 38 -22 58" fill="none" stroke="#fff" stroke-width="14"/>
+
+    <!-- trunk: its outline flares out of the face instead of starting with a cap -->
+    <path d="M350 520 V625 C350 672 370 700 405 700 C428 700 446 690 456 674" fill="none" stroke-width="82" stroke-linecap="butt"/>
+    <circle cx="456" cy="674" r="41" fill="#0B1F3A" stroke="none"/>
+    <path d="M350 470 V625 C350 672 370 700 405 700 C428 700 446 690 456 674" fill="none" stroke="#5B8FD0" stroke-width="42" stroke-linecap="butt"/>
+    <circle cx="456" cy="674" r="21" fill="#5B8FD0" stroke="none"/>
+    <path d="M319 521 C319 500 312 485 300 474 M381 521 C381 500 388 485 400 474" fill="none" stroke-width="20"/>
+    <path d="M338 585 h24 M338 620 h24" fill="none" stroke="#3E6FB0" stroke-width="7"/>
+
+    <!-- gopher paws on the elephant's head -->
+    <g stroke-width="14">
+      <ellipse cx="292" cy="254" rx="40" ry="31" fill="#F6C99A" transform="rotate(-15 292 254)"/>
+      <path d="M281 265 l-3 11 M305 262 l3 11" fill="none" stroke-width="9"/>
+      <ellipse cx="408" cy="254" rx="40" ry="31" fill="#F6C99A" transform="rotate(15 408 254)"/>
+      <path d="M395 262 l-3 11 M419 265 l3 11" fill="none" stroke-width="9"/>
+    </g>
+  </g>
+</svg>
