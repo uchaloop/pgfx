@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/uchaloop/pgfx/page"
 )
 
@@ -23,7 +24,10 @@ func (q fakeQuerier) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	return q.rows, q.err
 }
 
+var _ pgx.Rows = (*fakeRows)(nil)
+
 type fakeRows struct {
+	typeMap *pgtype.Map
 	fields  []pgconn.FieldDescription
 	values  [][]any
 	index   int
@@ -124,6 +128,14 @@ func (r *fakeRows) Values() ([]any, error) {
 
 func (*fakeRows) RawValues() [][]byte {
 	return nil
+}
+
+func (r *fakeRows) TypeMap() *pgtype.Map {
+	if r.typeMap == nil {
+		r.typeMap = pgtype.NewMap()
+	}
+
+	return r.typeMap
 }
 
 func (*fakeRows) Conn() *pgx.Conn {

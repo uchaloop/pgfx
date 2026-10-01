@@ -28,24 +28,25 @@ const defaultPostgresPort uint16 = 5432
 // Host and Database must be supplied by the deployment. User and Password are
 // optional: when empty they fall back to libpq's defaults (PGUSER / the OS user,
 // and PGPASSWORD / .pgpass).
+// Register with the explicit instance name "postgres" to read POSTGRES_*.
 type Config struct {
 	// Host is the endpoint as "host" or "host:port". A port in the string wins;
 	// when omitted, 5432 applies. IPv6 with a port must be bracketed
 	// ("[::1]:5433").
-	Host string `env:"HOST,notEmpty"`
+	Host string `env:"HOST,notEmpty" envDescription:"PostgreSQL host or host:port; port defaults to 5432."`
 
 	// Database is the PostgreSQL database name.
-	Database string `env:"DATABASE,notEmpty"`
+	Database string `env:"DATABASE,notEmpty" envDescription:"PostgreSQL database name."`
 
 	// User is the PostgreSQL role. When empty, libpq selects its default.
-	User string `env:"USER"`
+	User string `env:"USER" envDescription:"PostgreSQL role; unset or empty uses PGUSER or the operating system user."`
 
 	// Password holds the application-supplied secret. When empty, libpq may use
 	// PGPASSWORD or .pgpass.
-	Password secret.Secret `env:"PASSWORD"`
+	Password secret.Secret `env:"PASSWORD" envDescription:"PostgreSQL password; unset or empty allows PGPASSWORD or .pgpass."`
 
 	// AppName is reported as application_name in pg_stat_activity.
-	AppName string `env:"APP_NAME"`
+	AppName string `env:"APP_NAME" envDescription:"Application name reported in pg_stat_activity."`
 
 	// TLS configures libpq transport security.
 	TLS TLSConfig `envPrefix:"TLS_"`
@@ -65,59 +66,54 @@ type TLSConfig struct {
 	// SECURITY: "prefer"/"allow" fall back to unencrypted and never verify the
 	// server certificate; "require" encrypts but still does not verify it. Use
 	// "verify-full" with RootCert for MITM protection.
-	Mode string `env:"MODE"`
+	Mode string `env:"MODE" envDescription:"TLS mode: disable, allow, prefer, require, verify-ca or verify-full; unset uses the libpq default."`
 
 	// Cert is the path to the client certificate.
-	Cert string `env:"CERT"`
+	Cert string `env:"CERT" envDescription:"Path to the TLS client certificate."`
 
 	// Key is the path to the client private key.
-	Key string `env:"KEY"`
+	Key string `env:"KEY" envDescription:"Path to the TLS client private key."`
 
 	// RootCert is the path to the trusted root certificate.
-	RootCert string `env:"ROOT_CERT"`
+	RootCert string `env:"ROOT_CERT" envDescription:"Path to the trusted TLS root certificate."`
 
 	// ServerName overrides the TLS server name used for verification.
-	ServerName string `env:"SERVER_NAME"`
+	ServerName string `env:"SERVER_NAME" envDescription:"TLS server name used for certificate verification."`
 }
 
 // PoolConfig holds pgxpool sizing and connection-lifecycle settings. Zero values
 // leave the pgxpool defaults in place.
 type PoolConfig struct {
 	// MaxConns is the maximum pool size.
-	MaxConns int32 `env:"MAX_CONNS"`
+	MaxConns int32 `env:"MAX_CONNS" envDescription:"Maximum pool connections; zero keeps the pgxpool default."`
 
 	// MinConns is the minimum number of connections maintained by the pool.
-	MinConns int32 `env:"MIN_CONNS"`
+	MinConns int32 `env:"MIN_CONNS" envDescription:"Minimum pool connections; zero keeps the pgxpool default."`
 
 	// MinIdleConns is the minimum number of idle connections maintained by the
 	// pool.
-	MinIdleConns int32 `env:"MIN_IDLE_CONNS"`
+	MinIdleConns int32 `env:"MIN_IDLE_CONNS" envDescription:"Minimum idle pool connections; zero keeps the pgxpool default."`
 
 	// MaxConnLifetime is the maximum lifetime of a connection.
-	MaxConnLifetime time.Duration `env:"MAX_CONN_LIFETIME"`
+	MaxConnLifetime time.Duration `env:"MAX_CONN_LIFETIME" envDescription:"Maximum connection lifetime; zero keeps the pgxpool default."`
 
 	// MaxConnLifetimeJitter randomizes connection expiry to avoid synchronized
 	// reconnects.
-	MaxConnLifetimeJitter time.Duration `env:"MAX_CONN_LIFETIME_JITTER"`
+	MaxConnLifetimeJitter time.Duration `env:"MAX_CONN_LIFETIME_JITTER" envDescription:"Random connection lifetime adjustment; zero keeps the pgxpool default."`
 
 	// MaxConnIdleTime is the maximum time a connection may remain idle.
-	MaxConnIdleTime time.Duration `env:"MAX_CONN_IDLE_TIME"`
+	MaxConnIdleTime time.Duration `env:"MAX_CONN_IDLE_TIME" envDescription:"Maximum connection idle time; zero keeps the pgxpool default."`
 
 	// HealthPeriod controls how often pgxpool checks idle connections.
-	HealthPeriod time.Duration `env:"HEALTH_PERIOD"`
+	HealthPeriod time.Duration `env:"HEALTH_PERIOD" envDescription:"Interval between idle connection health checks; zero keeps the pgxpool default."`
 }
 
 // TimeoutConfig holds connection timeouts.
 type TimeoutConfig struct {
 	// Connect bounds establishing a single connection. Zero leaves the pgx
 	// default.
-	Connect time.Duration `env:"CONNECT"`
+	Connect time.Duration `env:"CONNECT" envDescription:"Connection establishment timeout; zero keeps the pgx default."`
 }
-
-// ConfigName is the default instance name, "postgres": a loader such as
-// confmaker reads POSTGRES_HOST and the rest of POSTGRES_* unless the application
-// names the instance itself.
-func (Config) ConfigName() string { return "postgres" }
 
 // Validate checks what the values mean, once a loader has supplied them: every
 // problem at once, not just the first, so a misconfigured deployment takes one
