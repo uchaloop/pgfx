@@ -10,12 +10,6 @@ import (
 	"github.com/uchaloop/secret/v2"
 )
 
-func TestConfigNameIsPostgres(t *testing.T) {
-	if got := (Config{}).ConfigName(); got != "postgres" {
-		t.Fatalf("ConfigName() = %q, want postgres", got)
-	}
-}
-
 func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
 	secretType := reflect.TypeOf(secret.Secret{})
 

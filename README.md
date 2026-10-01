@@ -96,7 +96,7 @@ manual config construction and `fx.Supply(cfg)`:
 // import "github.com/uchaloop/confx"
 fx.New(
     confx.Module(),
-    confx.Provide[pgfx.Config](), // POSTGRES_HOST, POSTGRES_DATABASE, ...
+    confx.Provide[pgfx.Config]("postgres"), // POSTGRES_HOST, POSTGRES_DATABASE, ...
     pgfx.Module,
 ).Run()
 ```
@@ -332,7 +332,7 @@ POSTGRES_TIMEOUTS_CONNECT=5s
 ```
 
 Host and database are required. Unset optional fields retain their documented
-defaults. `confmaker.Manifest[pgfx.Config]()` lists the whole set with types
+defaults. `confmaker.Manifest[pgfx.Config]("postgres")` lists the whole set with types
 and defaults.
 
 ## Documentation
