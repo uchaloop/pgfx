@@ -22,7 +22,7 @@ type sortableKey struct {
 }
 
 // sortableOf derives the sort whitelist from a model's struct tags: the tag
-// named by tagKey holds the name a client sends, the db tag (or the field name)
+// named by tagKey holds the name a client sends, the explicit db tag
 // holds the column it orders by.
 func sortableOf(model reflect.Type, tagKey string) (Cols, error) {
 	if model == nil {
@@ -38,7 +38,7 @@ func sortableOf(model reflect.Type, tagKey string) (Cols, error) {
 	}
 
 	key := sortableKey{model: model, tag: tagKey}
-	if cached, ok := sortableCache.Load(key); ok {
+	if cached, isOK := sortableCache.Load(key); isOK {
 		return cached.(Cols), nil
 	}
 
@@ -57,20 +57,14 @@ func sortableOf(model reflect.Type, tagKey string) (Cols, error) {
 func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 	for i := range model.NumField() {
 		field := model.Field(i)
-		if len(field.PkgPath) > 0 && !field.Anonymous {
+		if len(field.PkgPath) != 0 && !field.Anonymous {
 			continue
 		}
 
-		embedded := field.Type
-
-		for embedded.Kind() == reflect.Pointer {
-			embedded = embedded.Elem()
-		}
-
-		if field.Anonymous &&
-			embedded.Kind() == reflect.Struct &&
-			len(tagName(field, columnTagKey)) == 0 {
-			if err := collectSortable(embedded, tagKey, sortable); err != nil {
+		// pgx flattens anonymous struct values even when the embedding has
+		// a db tag (including "-"). Embedded pointers are ordinary fields.
+		if field.Anonymous && field.Type.Kind() == reflect.Struct {
+			if err := collectSortable(field.Type, tagKey, sortable); err != nil {
 				return err
 			}
 
@@ -82,10 +76,6 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 			continue
 		}
 
-		if len(column) == 0 {
-			column = strings.ToLower(field.Name)
-		}
-
 		name := column
 		if tagKey != columnTagKey {
 			name = tagName(field, tagKey)
@@ -94,8 +84,12 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 			}
 		}
 
+		if len(column) == 0 {
+			return fmt.Errorf("%w: %s", ErrMissingColumnTag, field.Name)
+		}
+
 		key := strings.ToLower(name)
-		if previous, ok := sortable[key]; ok && previous != column {
+		if previous, isOK := sortable[key]; isOK && previous != column {
 			return fmt.Errorf("%w: %q", ErrAmbiguousSortField, name)
 		}
 
@@ -107,8 +101,8 @@ func collectSortable(model reflect.Type, tagKey string, sortable Cols) error {
 
 // tagName returns the name part of a struct tag: "name,omitempty" -> "name".
 func tagName(field reflect.StructField, tagKey string) string {
-	value, ok := field.Tag.Lookup(tagKey)
-	if !ok {
+	value, isOK := field.Tag.Lookup(tagKey)
+	if !isOK {
 		return ""
 	}
 

@@ -18,7 +18,7 @@ const defaultPostgresPort uint16 = 5432
 
 // Config is the serializable configuration of a single Postgres connection. It
 // carries only plain, serializable values - no tracer, hooks, or other runtime
-// dependencies (those are passed to [Make] as [Option] values).
+// dependencies (those are passed to [MakeDB] as [Option] values).
 //
 // The `env` tags let a loader fill it from the environment (see
 // github.com/uchaloop/confmaker). They are inert strings, so the Config type
@@ -53,6 +53,9 @@ type Config struct {
 
 	// Pool configures pgxpool sizing and connection lifetimes.
 	Pool PoolConfig `envPrefix:"POOL_"`
+
+	// Health controls optional Fx shutdown after sustained pool unavailability.
+	Health HealthConfig `envPrefix:"HEALTH_"`
 
 	// Timeouts configures connection timeouts.
 	Timeouts TimeoutConfig `envPrefix:"TIMEOUTS_"`
@@ -133,11 +136,6 @@ func (cfg Config) Validate() error {
 
 	errs.Require(len(cfg.Database) != 0, "database is required")
 
-	// User and Password are optional: when empty they fall back to libpq's
-	// defaults (PGUSER / the OS user, and PGPASSWORD / .pgpass), so peer auth and
-	// passwordless connections work. See poolConfig, which only overrides them
-	// when set.
-
 	errs.Require(cfg.Pool.MaxConns >= 0, "pool.max_conns must not be negative")
 	errs.Require(cfg.Pool.MinConns >= 0, "pool.min_conns must not be negative")
 	errs.Require(
@@ -145,6 +143,14 @@ func (cfg Config) Validate() error {
 		"pool.min_conns must not exceed pool.max_conns",
 	)
 	errs.Require(cfg.Timeouts.Connect >= 0, "timeouts.connect must not be negative")
+
+	if cfg.Health.IsEnabled {
+		errs.Require(cfg.Health.Interval > 0, "health.interval must be positive")
+		errs.Require(cfg.Health.Timeout > 0, "health.timeout must be positive")
+		errs.Require(cfg.Health.FailureAfter > 0, "health.failure_after must be positive")
+		errs.Require(cfg.Health.Timeout <= cfg.Health.Interval, "health.timeout must not exceed health.interval")
+		errs.Require(cfg.Health.FailureAfter >= cfg.Health.Interval, "health.failure_after must not be less than health.interval")
+	}
 
 	return errs.Err()
 }
@@ -194,22 +200,40 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 	parts := []string{
 		"host=" + quoteDSN(host),
 		"port=" + strconv.FormatUint(uint64(port), 10),
+		"dbname=" + quoteDSN(cfg.Database),
 	}
 
-	if len(cfg.TLS.Mode) > 0 {
-		parts = append(parts, "sslmode="+quoteDSN(cfg.TLS.Mode))
+	// Resolve passfile credentials using the final database and user.
+	if len(cfg.User) != 0 {
+		parts = append(parts, "user="+quoteDSN(cfg.User))
 	}
 
-	if len(cfg.TLS.Cert) > 0 {
-		parts = append(parts, "sslcert="+quoteDSN(cfg.TLS.Cert))
-	}
+	if opts.isTLSOverride {
+		parts = append(
+			parts,
+			"sslmode=disable",
+			"sslnegotiation=postgres",
+			"sslrootcert=''",
+			"sslcert=''",
+			"sslkey=''",
+		)
+	} else {
+		if len(cfg.TLS.Mode) != 0 {
+			parts = append(parts, "sslmode="+quoteDSN(cfg.TLS.Mode))
+		}
 
-	if len(cfg.TLS.Key) > 0 {
-		parts = append(parts, "sslkey="+quoteDSN(cfg.TLS.Key))
-	}
+		if len(cfg.TLS.Cert) != 0 {
+			parts = append(parts, "sslcert="+quoteDSN(cfg.TLS.Cert))
+		}
 
-	if len(cfg.TLS.RootCert) > 0 {
-		parts = append(parts, "sslrootcert="+quoteDSN(cfg.TLS.RootCert))
+		if len(cfg.TLS.Key) != 0 {
+			parts = append(parts, "sslkey="+quoteDSN(cfg.TLS.Key))
+		}
+
+		if len(cfg.TLS.RootCert) != 0 {
+			parts = append(parts, "sslrootcert="+quoteDSN(cfg.TLS.RootCert))
+		}
+
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(strings.Join(parts, " "))
@@ -217,18 +241,9 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 		return nil, err
 	}
 
-	poolCfg.ConnConfig.Host = host
-	poolCfg.ConnConfig.Port = port
-	poolCfg.ConnConfig.Database = cfg.Database
-
-	// User and Password are optional: override the value ParseConfig derived from
-	// libpq's defaults (PGUSER / OS user, PGPASSWORD / .pgpass) only when set, so
-	// peer auth and passwordless connections keep working.
-	if len(cfg.User) > 0 {
-		poolCfg.ConnConfig.User = cfg.User
-	}
-
-	if password := cfg.Password.Reveal(); len(password) > 0 {
+	// Explicit passwords override environment and passfile credentials without
+	// being included in the connection string.
+	if password := cfg.Password.Reveal(); len(password) != 0 {
 		poolCfg.ConnConfig.Password = password
 	}
 
@@ -236,12 +251,12 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 		poolCfg.ConnConfig.ConnectTimeout = cfg.Timeouts.Connect
 	}
 
-	if len(cfg.TLS.ServerName) > 0 && poolCfg.ConnConfig.TLSConfig != nil {
+	if len(cfg.TLS.ServerName) != 0 && poolCfg.ConnConfig.TLSConfig != nil {
 		poolCfg.ConnConfig.TLSConfig = poolCfg.ConnConfig.TLSConfig.Clone()
 		poolCfg.ConnConfig.TLSConfig.ServerName = cfg.TLS.ServerName
 	}
 
-	if len(cfg.AppName) > 0 {
+	if len(cfg.AppName) != 0 {
 		if poolCfg.ConnConfig.RuntimeParams == nil {
 			poolCfg.ConnConfig.RuntimeParams = make(map[string]string)
 		}
@@ -257,6 +272,11 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 
 	for _, apply := range opts.poolOptions {
 		apply(poolCfg)
+	}
+
+	if opts.isTLSOverride {
+		poolCfg.ConnConfig.TLSConfig = opts.tlsConfig
+		poolCfg.ConnConfig.Fallbacks = nil
 	}
 
 	return poolCfg, nil

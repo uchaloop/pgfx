@@ -2,12 +2,10 @@ package pgfx
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/uchaloop/pgfx/page"
 )
 
@@ -25,12 +23,14 @@ func collectMany[T any](
 	sql string,
 	args ...any,
 ) ([]T, error) {
-	rows, err := q.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	return pgx.CollectRows(rows, scan)
+	return collectInto(
+		ctx,
+		q,
+		[]T{},
+		scan,
+		sql,
+		args...,
+	)
 }
 
 // collectInto appends decoded rows to dst, preserving the caller's capacity.
@@ -65,197 +65,62 @@ func collectOne[T any](
 	return pgx.CollectExactlyOneRow(rows, scan)
 }
 
-// collectPage runs the two statements one page takes: the rows, and - only when
-// the rows leave it unknown - the count.
-func collectPage[T any](
-	ctx context.Context,
-	q querier,
-	query page.Query,
-	req page.Request,
-	args []any,
-) ([]T, uint, error) {
-	statements, err := query.BuildRows(reflect.TypeFor[T](), req, len(args))
-	if err != nil {
-		return nil, 0, err
-	}
-
-	rows, more, err := collectPageRows[T](ctx, q, statements, args)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// A nonempty page with no row after it names the total itself. An empty
-	// page says nothing - it may sit past the end of a much larger set - and
-	// neither does a page that more rows follow.
-	if n := uint(len(rows)); n > 0 && !more {
-		return rows, statements.Offset + n, nil
-	}
-
-	count, err := collectTotal(ctx, q, query, args)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return rows, count, nil
+// collectPageRows decodes a prepared page using the requested capacity.
+func collectPageRows[T any](ctx context.Context, q querier, statement page.Statement, args []any) ([]T, error) {
+	return collectInto(
+		ctx,
+		q,
+		make([]T, 0, statement.Limit),
+		pgx.RowToStructByNameLax[T],
+		statement.Rows,
+		append(slices.Clip(args), statement.PageArgs...)...,
+	)
 }
 
-// countContext renames the query for the metrics: counting is a second
-// statement with a cost profile of its own, and it does not run for every page,
-// so reporting it under the caller's name would make both numbers unreadable.
-func countContext(ctx context.Context) context.Context {
-	name := QueryName(ctx)
-	if len(name) == 0 {
-		return ctx
+func collectPage[T any](ctx context.Context, q querier, query page.Query, req page.Request, args []any) (page.Result[T], error) {
+	statement, err := query.BuildStatement(reflect.TypeFor[T](), req, len(args))
+	if err != nil {
+		return page.Result[T]{}, err
 	}
 
-	return WithQueryName(ctx, name+".count")
+	rows, err := collectPageRows[T](ctx, q, statement, args)
+	if err != nil {
+		return page.Result[T]{}, err
+	}
+
+	total, err := collectOne(ctx, q, pgx.RowTo[int64], statement.Count, args...)
+	if err != nil {
+		return page.Result[T]{}, err
+	}
+
+	return page.Result[T]{List: rows, Total: total}, nil
 }
 
-// collectPageRows decodes a prepared page and reports whether another page
-// follows. The statement reads one row past the page, which is not returned.
-func collectPageRows[T any](ctx context.Context, q querier, statements page.Statements, args []any) ([]T, bool, error) {
-	resultRows, err := q.Query(ctx, statements.Rows, append(slices.Clip(args), statements.PagingArgs...)...)
+func collectOptionalRow[T any](ctx context.Context, q querier, sql string, args ...any) (T, bool, error) {
+	var zero T
+
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, false, err
-	}
-
-	rows, err := pgx.AppendRows(make([]T, 0, statements.Limit+1), resultRows, pgx.RowToStructByNameLax[T])
-	if err != nil {
-		return nil, false, err
-	}
-
-	if uint(len(rows)) > statements.Limit {
-		return rows[:statements.Limit], true, nil
-	}
-
-	return rows, false, nil
-}
-
-func fetchPageRows[T any](ctx context.Context, q querier, query page.Query, req page.Request, args []any) ([]T, bool, error) {
-	statements, err := query.BuildRows(reflect.TypeFor[T](), req, len(args))
-	if err != nil {
-		return nil, false, err
-	}
-
-	return collectPageRows[T](ctx, q, statements, args)
-}
-
-func collectTotal(ctx context.Context, q querier, query page.Query, args []any) (uint, error) {
-	sql, err := query.BuildCount()
-	if err != nil {
-		return 0, err
-	}
-
-	return collectOne(countContext(ctx), q, pgx.RowTo[uint], sql, args...)
-}
-
-func collectAfter[T any](ctx context.Context, q querier, query page.Query, req page.CursorRequest, args []any) (page.CursorResult[T], error) {
-	st, err := query.BuildAfter(reflect.TypeFor[T](), req, args...)
-	if err != nil {
-		return page.CursorResult[T]{}, err
-	}
-
-	rows, err := q.Query(ctx, st.Rows, st.Args...)
-	if err != nil {
-		return page.CursorResult[T]{}, err
+		return zero, false, err
 	}
 	defer rows.Close()
 
-	keyReader, err := newCursorKeyReader(rows.FieldDescriptions(), st.Orders)
+	if !rows.Next() {
+		return zero, false, rows.Err()
+	}
+
+	value, err := pgx.RowToStructByNameLax[T](rows)
 	if err != nil {
-		return page.CursorResult[T]{}, err
+		return zero, false, err
 	}
 
-	result := page.CursorResult[T]{List: make([]T, 0, req.Size)}
-	var keys []any
-
-	for rows.Next() {
-		if uint(len(result.List)) == req.Size {
-			result.HasMore = true
-
-			break
-		}
-
-		item, err := pgx.RowToStructByNameLax[T](rows)
-		if err != nil {
-			return page.CursorResult[T]{}, err
-		}
-
-		result.List = append(result.List, item)
-		if uint(len(result.List)) == req.Size {
-			keys, err = keyReader.read(rows)
-			if err != nil {
-				return page.CursorResult[T]{}, err
-			}
-		}
+	if rows.Next() {
+		return zero, false, pgx.ErrTooManyRows
 	}
 
-	rows.Close()
 	if err := rows.Err(); err != nil {
-		return page.CursorResult[T]{}, err
+		return zero, false, err
 	}
 
-	if result.HasMore {
-		result.NextCursor, err = st.Cursor(keys)
-		if err != nil {
-			return page.CursorResult[T]{}, err
-		}
-	}
-
-	return result, nil
-}
-
-// cursorKeyReader selects only ordered columns. Non-key columns are skipped by
-// pgx, so large JSON payloads are not decoded again for cursor construction.
-type cursorKeyReader struct {
-	positions   []int
-	columnCount int
-}
-
-func newCursorKeyReader(fields []pgconn.FieldDescription, orders []page.Order) (cursorKeyReader, error) {
-	reader := cursorKeyReader{positions: make([]int, len(orders)), columnCount: len(fields)}
-
-	for i, order := range orders {
-		reader.positions[i] = -1
-
-		for j, field := range fields {
-			if field.Name != order.Column {
-				continue
-			}
-
-			if reader.positions[i] != -1 {
-				return cursorKeyReader{}, fmt.Errorf("%w: duplicate column %q", page.ErrInvalidColumn, order.Column)
-			}
-
-			reader.positions[i] = j
-		}
-
-		if reader.positions[i] == -1 {
-			return cursorKeyReader{}, fmt.Errorf("%w: missing column %q", page.ErrInvalidColumn, order.Column)
-		}
-	}
-
-	return reader, nil
-}
-
-func (r cursorKeyReader) read(rows pgx.Rows) ([]any, error) {
-	keys := make([]any, len(r.positions))
-	dest := make([]any, r.columnCount)
-
-	for i, pos := range r.positions {
-		dest[pos] = &keys[i]
-	}
-
-	if err := rows.Scan(dest...); err != nil {
-		return nil, err
-	}
-
-	// Detach byte keys before Next can invalidate a custom codec's row buffer.
-	for i, key := range keys {
-		if value, ok := key.([]byte); ok {
-			keys[i] = slices.Clone(value)
-		}
-	}
-
-	return keys, nil
+	return value, true, nil
 }

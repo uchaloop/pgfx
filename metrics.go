@@ -79,8 +79,8 @@ type QueryMetric struct {
 // concurrently. The package ships no metrics dependency.
 //
 // Coverage follows pgx hooks: pool acquisition failures and empty batches are
-// not observed. In pgx v5.10, some early CopyFrom failures (such as statement
-// description errors) omit the end hook and therefore produce no metric.
+// not observed. Some early CopyFrom failures in the pinned pgx dependency
+// (such as statement description errors) omit the end hook and produce no metric.
 type QueryMetricFunc func(QueryMetric)
 
 type queryNameKey struct{}
@@ -101,8 +101,8 @@ func QueryName(ctx context.Context) string {
 type queryStartKey struct{}
 
 type queryStart struct {
-	at  time.Time
-	sql string
+	startedAt time.Time
+	sql       string
 }
 
 type batchStartKey struct{}
@@ -111,19 +111,19 @@ type batchStartKey struct{}
 // callbacks run in sequence for a batch, and pgx.BatchResults is not
 // safe for concurrent use either, so the counters need no locking.
 type batchStart struct {
-	at    time.Time
-	sql   string
-	rows  int64
-	err   error
-	ended bool
+	startedAt time.Time
+	sql       string
+	rows      int64
+	err       error
+	isEnded   bool
 }
 
 type copyStartKey struct{}
 
 // metricsTracer reports query, batch and copy lifecycles exposed by pgx hooks.
 type metricsTracer struct {
-	fn         QueryMetricFunc
-	includeSQL bool
+	fn            QueryMetricFunc
+	isSQLIncluded bool
 }
 
 func (t metricsTracer) TraceQueryStart(
@@ -131,8 +131,8 @@ func (t metricsTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	start := queryStart{at: time.Now()}
-	if t.includeSQL {
+	start := queryStart{startedAt: time.Now()}
+	if t.isSQLIncluded {
 		start.sql = data.SQL
 	}
 
@@ -144,8 +144,8 @@ func (t metricsTracer) TraceQueryEnd(
 	_ *pgx.Conn,
 	data pgx.TraceQueryEndData,
 ) {
-	start, ok := ctx.Value(queryStartKey{}).(queryStart)
-	if !ok {
+	start, isOK := ctx.Value(queryStartKey{}).(queryStart)
+	if !isOK {
 		return
 	}
 
@@ -153,7 +153,7 @@ func (t metricsTracer) TraceQueryEnd(
 		Kind:         KindQuery,
 		Name:         QueryName(ctx),
 		SQL:          start.sql,
-		Duration:     time.Since(start.at),
+		Duration:     time.Since(start.startedAt),
 		RowsAffected: data.CommandTag.RowsAffected(),
 		Err:          data.Err,
 	})
@@ -164,8 +164,8 @@ func (t metricsTracer) TraceBatchStart(
 	_ *pgx.Conn,
 	data pgx.TraceBatchStartData,
 ) context.Context {
-	start := &batchStart{at: time.Now()}
-	if t.includeSQL {
+	start := &batchStart{startedAt: time.Now()}
+	if t.isSQLIncluded {
 		start.sql = batchSQL(data.Batch)
 	}
 
@@ -181,8 +181,8 @@ func (t metricsTracer) TraceBatchQuery(
 	_ *pgx.Conn,
 	data pgx.TraceBatchQueryData,
 ) {
-	start, ok := ctx.Value(batchStartKey{}).(*batchStart)
-	if !ok || start.ended {
+	start, isOK := ctx.Value(batchStartKey{}).(*batchStart)
+	if !isOK || start.isEnded {
 		return
 	}
 
@@ -198,14 +198,14 @@ func (t metricsTracer) TraceBatchEnd(
 	_ *pgx.Conn,
 	data pgx.TraceBatchEndData,
 ) {
-	start, ok := ctx.Value(batchStartKey{}).(*batchStart)
-	if !ok || start.ended {
+	start, isOK := ctx.Value(batchStartKey{}).(*batchStart)
+	if !isOK || start.isEnded {
 		return
 	}
 
 	// pgx can end a batch on a SendBatch early error and again on Close.
 	// Mark it before invoking user code, including in case that code panics.
-	start.ended = true
+	start.isEnded = true
 
 	err := data.Err
 	if err == nil {
@@ -217,7 +217,7 @@ func (t metricsTracer) TraceBatchEnd(
 		Kind:         KindBatch,
 		Name:         QueryName(ctx),
 		SQL:          start.sql,
-		Duration:     time.Since(start.at),
+		Duration:     time.Since(start.startedAt),
 		RowsAffected: start.rows,
 		Err:          err,
 	})
@@ -236,15 +236,15 @@ func (t metricsTracer) TraceCopyFromEnd(
 	_ *pgx.Conn,
 	data pgx.TraceCopyFromEndData,
 ) {
-	at, ok := ctx.Value(copyStartKey{}).(time.Time)
-	if !ok {
+	startedAt, isOK := ctx.Value(copyStartKey{}).(time.Time)
+	if !isOK {
 		return
 	}
 
 	t.fn(QueryMetric{
 		Kind:         KindCopyFrom,
 		Name:         QueryName(ctx),
-		Duration:     time.Since(at),
+		Duration:     time.Since(startedAt),
 		RowsAffected: data.CommandTag.RowsAffected(),
 		Err:          data.Err,
 	})

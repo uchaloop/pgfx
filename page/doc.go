@@ -5,8 +5,7 @@ and what a query is allowed to order by.
 It depends on nothing but the standard library, so the layers that speak about
 pages - a handler that parsed the request, a domain interface that declares the
 repository - can say so without importing a database driver. The execution
-lives in pgfx: pgfx.DB.FetchPage, pgfx.DB.FetchPageRows and pgfx.DB.FetchAfter
-take a [Query] and a request.
+lives in pgfx: pgfx.DB.FetchPage and pgfx.Tx.FetchPage take a [Query] and a request.
 
 # The query
 
@@ -14,66 +13,60 @@ A page is applied around a query, not woven into it. The SELECT stays plain -
 columns, joins, filter - and pgfx wraps it:
 
 	SELECT * FROM ( <query> ) AS pgfx_page ORDER BY ... LIMIT $n+1 OFFSET $n+2
-	SELECT count(*) FROM ( <query> ) AS pgfx_page
+	SELECT COUNT(*) FROM ( <query> ) AS pgfx_page
 
 which is what keeps the filter written once, the arguments numbered from $1, and
 the rows decodable by the `db:"..."` tag like every other row pgfx returns.
 
-Two consequences are worth knowing. The order sees output columns only, so
-ordering by an expression means selecting it under an alias. And the count runs
-the filter a second time; [CountSQL] gives it a cheaper statement when the joins
-are there only for columns.
+The order sees output columns only, so ordering by an expression means
+selecting it under an alias.
 
-	query, err := page.Make(
+	query, err := page.MakeQuery(
 		fetchWarehousesSQL,
-		page.Head(page.Desc("is_active")),
-		page.Tie(page.Asc("id")),
-		page.Sortable(page.Cols{"cityEng": "city_eng", "createdAt": "created_at"}),
+		page.WithHead(page.MakeDescOrder("is_active")),
+		page.WithTie(page.MakeAscOrder("id")),
+		page.WithSortable(page.Cols{"cityEng": "city_eng", "createdAt": "created_at"}),
 	)
 
-[Tie] is required. A page needs a total order: without a unique column at the
+[WithTie] is required. A page needs a total order: without a unique column at the
 end of it, rows with equal sort keys change places between two queries, and then
 they repeat on one page and go missing from another. The tie keeps its own
 direction when it is the whole order; after other orders it takes the direction
-of the last one, so a composite index such as (city_eng, id) serves the whole
-order in one scan.
+of the last one. A matching composite index can support this order; actual
+plans also depend on predicates, NULL placement and PostgreSQL planner choices.
 
-# Pagination strategies
+# Pagination
 
-[Request] selects numbered LIMIT/OFFSET pages. The rows statement reads one row
-past the page, which tells whether another page follows. FetchPage counts the
-base SELECT without the added order or page bounds, unless a nonempty page with
-no row after it already gives the total. FetchPageRows never counts and reports
-whether another page follows. [Query.BuildRows] and [Query.BuildCount] render
-the two statements separately, [Query.Build] both at once.
+[Request] selects numbered LIMIT/OFFSET pages using Page and Limit, with
+OFFSET = (Page - 1) * Limit. [Query.BuildStatement] renders both statements.
+FetchPage executes the row query, then the count query with the original filter
+arguments, and returns [Result] with List and Total. The row query reads at most
+Limit rows. Total counts the complete base result, preserving DISTINCT, grouping
+and joins, even when the requested page is empty or beyond the last page.
 
-[CursorRequest] selects keyset pages through pgfx.DB.FetchAfter or
-pgfx.Tx.FetchAfter. [Query.BuildAfter] uses comparisons of sort keys, with
-limited UNION ALL branches for mixed directions and NULL transitions. A matching
-B-tree index is needed for efficient seeking; arbitrary joins, expressions and
-sorts can still require substantial work. Cursor pagination does not provide
-random page numbers. FetchTotal explicitly counts the complete base filter.
-Neither pagination approach creates a transaction automatically.
-
-BETWEEN is not a pagination mode. Custom key-range queries remain ordinary SQL
-and can be executed with FetchRows.
+FetchPage does not create a transaction automatically. The queries can observe
+different snapshots under concurrent writes. Use pgfx.Tx.FetchPage in an explicit
+REPEATABLE READ transaction when the list and count must share a snapshot.
 
 # The request
 
 A [Request] is a page number, a page size and the sort fields as the client
 spelled them:
 
-	page.Request{Number: 2, Size: 20, Sort: []string{"cityEng:desc"}}
+	page.Request{Page: 2, Limit: 20, Sort: []string{"cityEng:desc"}}
 
 Sort fields are matched case-insensitively against a whitelist, and an unknown
 one is [ErrUnknownSortField] rather than a silent skip - a client that asked for
-an order it did not get should hear about it. [Sortable] is the whitelist: list
-the fields an index serves, since a sort without one reads and sorts the whole
-result on every page. [SortKeyTag] opens every field of the model the rows
-decode into instead, named by a struct tag such as json. Without either, a
-client may not sort.
+an order it did not get should hear about it. [WithSortable] is the whitelist: list
+fields suitable for the workload; unsupported sorts may require scanning and
+sorting many rows. [WithSortKeyTag] derives the whitelist from a struct tag such as
+json. WithSortable
+fields require explicit db tags; missing tags return [ErrMissingColumnTag].
+Ignored fields are omitted, while anonymous struct values are flattened like
+pgx, ignoring tags on the embedding itself. Without either option, a client
+may not sort.
 
-A zero number or size is [ErrInvalidRequest]. Substituting defaults for a page a
+A zero Page or Limit returns [ErrInvalidRequest]. Substituting defaults for a page a
 client did not fully specify belongs at the edge that parsed the request: only
 that layer can tell "not sent" from "sent as zero", and the default is part of
 the API contract rather than of the query.

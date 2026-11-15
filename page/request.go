@@ -10,12 +10,12 @@ import "math"
 // as zero", and the default is part of the API contract, not of the query. A
 // Request that reaches the database is expected to be complete.
 type Request struct {
-	// Number is the 1-based page number.
-	Number uint
+	// Page is the 1-based page number.
+	Page uint
 
-	// Size is how many rows the page holds. pgfx reserves Size+1 result elements.
+	// Limit is how many rows the page holds. pgfx reserves Limit result elements.
 	// Validate an application-specific maximum before fetching.
-	Size uint
+	Limit uint
 
 	// Sort holds the requested order as "field" or "field:desc", in the names a
 	// client uses rather than in column names. It may be empty: the query's own
@@ -25,36 +25,24 @@ type Request struct {
 
 // bounds converts the request into the LIMIT and OFFSET of the rows statement.
 func (r Request) bounds() (limit, offset uint, err error) {
-	// The statement reads one row past the page, and Postgres takes LIMIT as a
-	// bigint, so Size+1 has to fit one.
-	if r.Number == 0 || r.Size == 0 || uint64(r.Size) >= uint64(math.MaxInt64) {
+	// PostgreSQL takes LIMIT as a bigint.
+	if r.Page == 0 || r.Limit == 0 || uint64(r.Limit) > uint64(math.MaxInt64) {
 		return 0, 0, ErrInvalidRequest
 	}
 
 	// Postgres takes OFFSET as a bigint, and the product below wraps silently on
 	// a page number no client has any business sending.
-	if uint64(r.Number-1) > uint64(math.MaxInt64)/uint64(r.Size) {
+	if uint64(r.Page-1) > uint64(math.MaxInt64)/uint64(r.Limit) {
 		return 0, 0, ErrInvalidRequest
 	}
 
-	return r.Size, (r.Number - 1) * r.Size, nil
+	return r.Limit, (r.Page - 1) * r.Limit, nil
 }
 
-// CursorRequest selects the next rows after a previous response. An empty After
-// starts a traversal. Size must be positive; it may change between requests.
-type CursorRequest struct {
-	// Size is the page size and initial result capacity in pgfx.
-	// Validate an application-specific maximum before fetching.
-	Size  uint
-	After string
-	Sort  []string
-}
-
-// CursorResult is a keyset page. NextCursor is set only when HasMore is true.
-// It does not include a total; FetchTotal counts the base filter separately.
-// It carries no JSON tags: the shape of a response belongs to the application.
-type CursorResult[T any] struct {
-	List       []T
-	NextCursor string
-	HasMore    bool
+// Result contains the selected page and the total number of base query rows.
+// An empty successful page has a non-nil List and still includes Total.
+// Response serialization belongs to the application.
+type Result[T any] struct {
+	List  []T
+	Total int64
 }

@@ -1,6 +1,6 @@
 module github.com/uchaloop/pgfx
 
-go 1.27
+go 1.27.0
 
 require (
 	github.com/exaring/otelpgx v0.12.0

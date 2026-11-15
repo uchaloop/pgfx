@@ -12,23 +12,44 @@ constructs Config in Go or uses a loader of its choice. pgfx does not read a
 configuration source itself. Host and Database are required; optional fields
 retain their documented pgx defaults when unset.
 
-[Make] creates a pool owned by the caller, who must close it. Pool creation does
+[MakeDB] creates a pool owned by the caller, who must close it. Pool creation does
 not verify connectivity; use Ping when startup verification is required.
-[Module] supplies *DB through Uber Fx, verifies connectivity on application
-start and closes the pool on stop:
+[MakeModule] supplies *Connection through Uber Fx. It creates and pings the pool
+on start and closes it on stop. Consumers call [Connection.DB] in their own
+OnStart hooks or after successful startup. Before readiness and after shutdown,
+the handle returns [ErrConnectionNotReady] or [ErrConnectionClosed], respectively.
 
-	fx.New(
-		fx.Supply(pgfx.Config{Host: "localhost:5432", Database: "orders"}),
-		pgfx.Module,
-	).Run()
+Fx constructs providers lazily: register a consumer of *Connection to activate
+its lifecycle hooks. The runnable examples/fx program registers a consumer,
+executes SELECT 1 in its OnStart hook, and stops the application. The examples
+for MakeModule and MakeModuleFor show untagged and named consumers.
 
-[ModuleFor] consumes a Config with an Fx name and provides a DB with the same
-name. Each named connection has its own configuration. The native pool is not
-registered separately in Fx; it is available through DB.Pool.
+[MakeModuleFor] consumes a Config with an Fx name and provides a Connection with the same
+name. Each named connection has its own configuration and runtime options.
+Both modules accept the same [Option] values as [MakeDB], applied after injected
+tracing and metrics defaults. Use [WithAfterConnect] for per-connection type
+registration; create the database types before application startup. The native
+pool is not registered separately in Fx; it is available through DB.Pool.
 
-For convenient environment loading and Fx integration, confmaker/confx is an
-optional recommended loader. It can replace manual Config construction; it is
-not required by pgfx. See the README for its setup and environment prefixes.
+# Optional health policy
+
+[HealthConfig] enables periodic checks only for Fx-managed connections. Add
+[HealthModule] once at the application root; do not nest it inside fx.Module or
+bypass its decorated shutdowner. Enabled checks without it fail construction
+with [ErrHealthModuleRequired]. Both the policy and adapter are optional when
+checks are disabled. [MakeDB] validates the policy but never runs a monitor.
+
+Each named connection uses its own policy. Sustained pool unavailability,
+including saturation, can stop the whole application. See [HealthConfig] for
+explicit duration requirements, recovery and sampled failure timing, and
+[HealthModule] for the shared shutdown contract.
+
+An optional *slog.Logger controls transition logs; otherwise slog.Default is
+used. Logs omit raw errors and credentials. Logging callbacks must not block.
+OnStop cancels and joins the monitor before closing the pool; consumer stop
+hooks run first in Fx's reverse lifecycle order and must release borrowed
+connections. fx.App.Run handles shutdown; manual Start/Stop owners must receive
+app.Wait, stop the application and propagate the exit code themselves.
 
 # Typed fetches
 
@@ -44,59 +65,38 @@ once its previous consumers have finished. Always use the returned slice. Errors
 return nil but may leave writes in the supplied backing array. The same methods
 are available on Tx.
 
-Singular fetches require exactly one row and return pgx.ErrNoRows or
-pgx.ErrTooManyRows otherwise. Plural fetches accept an empty result. Use
+[DB.FetchRow] and [DB.FetchValue], and their Tx counterparts, require exactly
+one row: an empty result returns pgx.ErrNoRows, and multiple rows return
+pgx.ErrTooManyRows. Query and decoding errors remain errors. Plural fetches
+accept an empty result. Use
 FetchValue for a single-column INSERT or UPDATE with RETURNING, and FetchRow
 for multiple returned columns. Native pgx operations remain available directly.
 
 # Pagination
 
-[DB.FetchPage] returns a list and total: the total number of rows matching the
-base SELECT before pagination. [DB.FetchPageRows] returns the list and whether
-another page follows, and never executes a count query. Both methods decode
-structs using the same db mapping as FetchRows and are also available on Tx.
+[DB.FetchPage] uses [page.Request] for numbered LIMIT/OFFSET pages and returns
+[page.Result] with List and Total. The same method is available on Tx. Each
+successful call executes the row SELECT followed by a separate COUNT over the
+same base SELECT and filter arguments. An empty page still returns the total;
+a failure returns a zero result and an error.
 
-Build a [page.Query] once from a SELECT containing columns, joins and filters.
-Do not add top-level ORDER BY, LIMIT or pagination to that SELECT. Pass filter
-arguments separately from the [page.Request], starting at $1.
+Build a reusable [page.Query] from a SELECT with columns, joins and filters,
+without top-level ORDER BY, LIMIT or OFFSET. Filter arguments start at $1.
+See the page package for sorting, query construction and request validation.
 
-Numbered pages use LIMIT/OFFSET and read one row past the page, which tells
-whether another page follows. [DB.FetchAfter] instead accepts a
-[page.CursorRequest] and returns a [page.CursorResult] with List, NextCursor and
-HasMore. It seeks after the last returned sort keys and fetches one extra row;
-it never counts. [DB.FetchTotal] explicitly counts the base filter independently.
-These methods are also available on Tx. Prefer offset for shallow numbered
-pages and cursor for sequential traversal of large results with matching indexes.
-
-Offset fetches reserve Size+1 elements, including the lookahead row; cursor
-fetches reserve Size. This also reserves memory for empty pages. The application
+FetchPage reserves Limit elements, including for empty pages. The application
 must validate an appropriate maximum page size; there is no internal capacity cap.
+Deep offsets scan skipped rows and the exact count covers the complete base result.
 
-Cursor keys must be selected output columns. Tokens bind SQL, sort and filter
-arguments, which must have stable JSON representations. Tokens are not signed
-or encrypted and do not replace authorization. Supported key types are documented
-on [page.CursorStatement.Cursor]; arbitrary custom pgx types are not supported.
-Changing sort keys concurrently can still move rows across page boundaries.
+Sort keys must be selected output columns, with a unique [page.WithTie] order.
+Use [page.WithSortable] or [page.WithSortKeyTag] to allow client sorting; the latter
+requires explicit db tags. Matching indexes can support ordering, but execution
+plans depend on predicates and NULL placement.
 
-Sorting applies [page.Head], the requested sort, then [page.Tie]. Tie must
-provide a unique ordering for the result; after other orders it takes the
-direction of the last one, so one composite index serves the whole order. A
-client sorts only by the fields [page.Sortable] lists; [page.SortKeyTag] opens
-every field of the model under the names of a struct tag, such as json. Unknown
-sort fields return an error.
-
-FetchPage counts the base SELECT in a separate statement unless a nonempty page
-with no row after it already determines the total. A page that more rows follow,
-and an empty page, require the count. [page.CountSQL] can supply a cheaper
-equivalent SELECT for counting; it
-must return the same number of rows and accept the same arguments. JOIN
-multiplicity, DISTINCT and GROUP BY belong to the base SELECT: pgfx counts its
-result rows, not inferred entities.
-
-Pagination does not create a transaction. Concurrent writes can change data
-between the list and count statements. When one snapshot is required, call
-[Tx.FetchPage] inside [DB.Transaction] with pgx.RepeatableRead and, for reads,
-pgx.ReadOnly. This is an explicit caller choice.
+Pagination does not create a transaction. Concurrent writes can make its two
+queries observe different snapshots, including in a READ COMMITTED transaction.
+To read the list and total from one snapshot, use an explicit transaction with
+pgx.RepeatableRead and [Tx.FetchPage].
 
 # Transactions
 
@@ -109,25 +109,49 @@ Isolation and access mode are supplied through pgx.TxOptions.
 
 # Tracing and metrics
 
-[WithTracing] enables otelpgx spans; [WithTracer] installs a custom pgx tracer.
-[Module] enables tracing when a trace.TracerProvider is supplied through Fx.
+[WithTrace] enables otelpgx spans; [WithTracer] installs a custom pgx tracer.
+[MakeModule] enables tracing when a trace.TracerProvider is supplied through Fx.
 [WithQueryMetrics] installs a callback without requiring a metrics backend.
 The callback must be concurrency-safe, cheap and non-blocking.
 
-[WithQueryName] gives an operation a stable name. A pagination count uses that
-name with a .count suffix. SQL is omitted from metrics unless explicitly enabled
+[WithQueryName] gives an operation a stable name.
+SQL is omitted from metrics unless explicitly enabled
 with [WithSQLInQueryMetrics]. Use bounded names, not raw SQL, as metric labels.
 
-Metrics follow pgx hooks. Duration includes result consumption but excludes pool
-acquisition. A batch produces one observation, with potentially partial row
-counts on error; it does not imply commit. Empty batches and pool acquisition
-failures are not observed. Some early COPY failures omit the end hook. See
-[QueryMetric] and [QueryMetricFunc] for the full callback contract.
+See [QueryMetric] and [QueryMetricFunc] for measurement boundaries, batch
+aggregation, partial results and pgx hook coverage limitations.
+
+# Optional rows
+
+DB.FetchOptionalRow and Tx.FetchOptionalRow return a value, an isFound flag and
+an error. Only an empty successful query returns false with no error; FetchRow
+continues to require exactly one row. IsConstraint matches a nonempty SQLSTATE
+and constraint name on the same first PostgreSQL error.
+
+# Transactions with values
+
+DB.TransactionValue returns a typed callback result after successful commit.
+Tx.TransactionValue releases a savepoint, without committing the outer transaction.
+Both return a zero value on error and preserve Transaction error and panic semantics.
+
+# Error classification and test support
+
+[AsPgError], [SQLState] and [IsSQLState] classify the first PostgreSQL error in an
+error tree without replacing it. Constraint and transaction-error predicates
+provide common checks; they do not establish that retrying is safe.
+[EscapeLike] escapes literal text for parameterized LIKE/ILIKE patterns with
+PostgreSQL's default backslash escape, not SQL or regular expressions.
+
+The github.com/uchaloop/pgfx/test package connects tests to an existing database
+and verifies readiness with Ping. It adds no isolation or automatic skipping.
 
 # TLS and connection hooks
 
 [TLSConfig] supplies file-based TLS settings. [WithTLS] supplies an in-memory
 configuration and replaces the configured fallbacks. [WithBeforeConnect] and
 [WithAfterConnect] expose connection hooks for credentials and type registration.
+[WithPrepareConn], [WithAfterRelease], [WithBeforeClose] and [WithShouldPing]
+configure the native pool lifecycle callbacks through MakeDB, MakeModule or MakeModuleFor.
+See their GoDoc for callback outcomes, concurrency and shutdown requirements.
 */
 package pgfx

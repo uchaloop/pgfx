@@ -33,18 +33,18 @@ const (
 // interpolated as SQL.
 type Order struct {
 	Column string
-	Desc   bool
+	IsDesc bool
 	Nulls  Nulls
 }
 
-// Asc orders by column ascending, leaving NULL placement to Postgres.
-func Asc(column string) Order {
+// MakeAscOrder orders by column ascending, leaving NULL placement to Postgres.
+func MakeAscOrder(column string) Order {
 	return Order{Column: column}
 }
 
-// Desc orders by column descending, leaving NULL placement to Postgres.
-func Desc(column string) Order {
-	return Order{Column: column, Desc: true}
+// MakeDescOrder orders by column descending, leaving NULL placement to Postgres.
+func MakeDescOrder(column string) Order {
+	return Order{Column: column, IsDesc: true}
 }
 
 // validate reports whether the term can be rendered as an identifier.
@@ -63,7 +63,7 @@ func (o Order) validate() error {
 // writeSQL appends one validated order term.
 func (o Order) writeSQL(b *strings.Builder) {
 	b.WriteString(quoteIdent(o.Column))
-	if o.Desc {
+	if o.IsDesc {
 		b.WriteString(" DESC")
 	} else {
 		b.WriteString(" ASC")
@@ -84,7 +84,7 @@ func quoteIdent(name string) string {
 }
 
 // parseSort splits one client sort value: "field" or "field:desc".
-func parseSort(value string) (field string, desc bool, err error) {
+func parseSort(value string) (field string, isDesc bool, err error) {
 	field, direction, _ := strings.Cut(strings.TrimSpace(value), ":")
 
 	field = strings.TrimSpace(field)
@@ -103,11 +103,11 @@ func parseSort(value string) (field string, desc bool, err error) {
 }
 
 // orders resolves the ORDER BY for a request. A whitelist is derived from the
-// model only when SortKeyTag asks for it; without one, any requested sort field
+// model only when WithSortKeyTag asks for it; without one, any requested sort field
 // is unknown.
 func (q Query) orders(model reflect.Type, sort []string) ([]Order, error) {
 	sortable := q.sortable
-	if sortable == nil && len(sort) > 0 && len(q.tagKey) > 0 {
+	if sortable == nil && len(sort) != 0 && len(q.tagKey) != 0 {
 		var err error
 		sortable, err = sortableOf(model, q.tagKey)
 		if err != nil {
@@ -140,7 +140,7 @@ func (q Query) resolveOrders(sortable Cols, sort []string) ([]Order, error) {
 	seen := make(map[string]struct{}, cap(parts))
 
 	add := func(order Order) {
-		if _, ok := seen[order.Column]; ok {
+		if _, isOK := seen[order.Column]; isOK {
 			return
 		}
 
@@ -153,30 +153,31 @@ func (q Query) resolveOrders(sortable Cols, sort []string) ([]Order, error) {
 	}
 
 	for _, value := range sort {
-		field, desc, err := parseSort(value)
+		field, isDesc, err := parseSort(value)
 		if err != nil {
 			return nil, err
 		}
 
-		column, ok := sortable[strings.ToLower(field)]
-		if !ok {
+		column, isOK := sortable[strings.ToLower(field)]
+		if !isOK {
 			return nil, fmt.Errorf("%w: %q", ErrUnknownSortField, field)
 		}
 
-		add(Order{Column: column, Desc: desc})
+		add(Order{Column: column, IsDesc: isDesc})
 	}
 
 	// After other orders the tie takes the direction of the last one, so that
 	// one composite index serves the whole order; alone, it keeps its own.
-	follow := len(parts) > 0
-	var desc bool
-	if follow {
-		desc = parts[len(parts)-1].Desc
+	isFollow := len(parts) != 0
+	var isDesc bool
+
+	if isFollow {
+		isDesc = parts[len(parts)-1].IsDesc
 	}
 
 	for _, order := range q.tie {
-		if follow {
-			order.Desc = desc
+		if isFollow {
+			order.IsDesc = isDesc
 		}
 
 		add(order)

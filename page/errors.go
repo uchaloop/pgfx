@@ -3,22 +3,18 @@ package page
 import "errors"
 
 var (
-	// ErrInvalidCursor reports malformed, incompatible or oversized cursors.
-	ErrInvalidCursor = errors.New("invalid or incompatible cursor")
-
-	// ErrCursorValue reports a cursor key or filter value that cannot be encoded.
-	ErrCursorValue = errors.New("unsupported cursor value")
-
+	// ErrMissingColumnTag reports a sortable field without an explicit SQL column.
+	ErrMissingColumnTag = errors.New("sortable field requires a db tag")
 	// ErrInvalidNulls reports an unknown NULL ordering policy.
 	ErrInvalidNulls = errors.New("invalid NULL ordering")
 
 	// ErrAmbiguousSortField reports conflicting case-insensitive sort names.
 	ErrAmbiguousSortField = errors.New("ambiguous sort field")
 
-	// ErrNoSQL is reported by Make when the query text is empty.
+	// ErrNoSQL is reported by MakeQuery when the query text is empty.
 	ErrNoSQL = errors.New("empty page query")
 
-	// ErrNoTie is reported by Make when no tie order is given. A page needs a
+	// ErrNoTie is reported by MakeQuery when no tie order is given. A page needs a
 	// total order: without a stabilizer, rows with equal sort keys are free to
 	// change places between two pages, and then they repeat on one page and go
 	// missing from another.
@@ -39,12 +35,12 @@ var (
 
 	// ErrUnknownSortField is reported when a sort field is not in the whitelist.
 	// It is an error rather than a silent skip: a client that asked for an order
-	// it did not get should hear about it. A query without Sortable or
-	// SortKeyTag has no whitelist, so every requested field is unknown.
+	// it did not get should hear about it. A query without WithSortable or
+	// WithSortKeyTag has no whitelist, so every requested field is unknown.
 	ErrUnknownSortField = errors.New("unknown sort field")
 
-	// ErrUnsortableModel is reported when SortKeyTag derives the whitelist from
-	// a model that is not a struct. Give the whitelist with Sortable, or decode
+	// ErrUnsortableModel is reported when WithSortKeyTag derives the whitelist from
+	// a model that is not a struct. Give the whitelist with WithSortable, or decode
 	// into a struct.
 	ErrUnsortableModel = errors.New("sort whitelist needs a struct model")
 )
