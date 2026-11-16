@@ -9,8 +9,7 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [0.10.0] - 2026-11-15
 
-This release contains breaking API changes. See the
-[migration guide from 0.9.1](docs/migration-0.10.0.md).
+This release contains breaking API changes.
 
 ### Added
 
@@ -23,16 +22,23 @@ This release contains breaking API changes. See the
 
 ### Changed
 
-- `FetchPage` uses `Page`/`Limit` and returns `List`/`Total`, counting even empty pages.
-  The row and count queries do not implicitly share a transaction or snapshot.
+- Pagination uses `page.Fetch[T]` with list and count callbacks, returning
+  `page.Result[T]` (`List []T`, `Total int64`).
+  The default calls list then count, including for empty lists. Callback errors
+  return a zero result; successful nil lists become non-nil empty slices.
+- `page.WithParallel()` explicitly runs callbacks concurrently, cancels the
+  sibling on the first recorded error and waits for both callbacks. Use their
+  supplied contexts; do not share one transaction or connection in parallel.
 - Fx modules provide a lifecycle-owned `*Connection`; callers must not close its DB.
-- Constructors and page options use `Make`/`With`; `BuildStatement` replaces `BuildRows`.
-- `WithSortKeyTag` requires explicit `db` tags for sortable fields.
+- Database constructors use `Make` and runtime options use `With`.
 
 ### Removed
 
+- The page SQL constructor API, request, sort and statement types and helpers.
+  Applications now own SQL, request validation, sort whitelists and matching
+  list/count filters. A shared snapshot requires sequential callbacks within
+  an explicit REPEATABLE READ transaction.
 - Cursor pagination, lookahead results and separate pagination/count helpers.
-  Use `FetchPage` or `Query.BuildStatement`; renamed APIs have no compatibility aliases.
 
 ## [0.9.1] - 2026-10-01
 

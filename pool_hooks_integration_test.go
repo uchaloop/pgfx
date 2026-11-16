@@ -83,7 +83,11 @@ func TestPoolHooksLifecycle(t *testing.T) {
 				WithPrepareConn(func(ctx context.Context, conn *pgx.Conn) (bool, error) {
 					_, err := conn.Exec(ctx, "SELECT set_config('application_name', 'prepared', false)")
 
-					return true, err
+					if err != nil {
+						return true, err
+					}
+
+					return true, nil
 				}),
 				WithAfterRelease(func(*pgx.Conn) bool { return !isDiscard.Load() }),
 				WithBeforeClose(func(conn *pgx.Conn) { closed <- conn.PgConn().PID() }),
@@ -166,7 +170,7 @@ func TestPoolPrepareConnOutcomes(t *testing.T) {
 		t.Run(item.name, func(t *testing.T) {
 			var isArmed atomic.Bool
 			var rejectedPID atomic.Uint32
-			want := errors.New("prepare rejected")
+			errExpected := errors.New("prepare rejected")
 			db := makePoolHooksTestDB(t, "default", WithPrepareConn(func(_ context.Context, conn *pgx.Conn) (bool, error) {
 				if !isArmed.CompareAndSwap(true, false) {
 					return true, nil
@@ -174,7 +178,7 @@ func TestPoolPrepareConnOutcomes(t *testing.T) {
 
 				rejectedPID.Store(conn.PgConn().PID())
 				if item.isError {
-					return item.isKeep, want
+					return item.isKeep, errExpected
 				}
 
 				return item.isKeep, nil
@@ -185,7 +189,7 @@ func TestPoolPrepareConnOutcomes(t *testing.T) {
 			isArmed.Store(true)
 			conn, err := db.Acquire(ctx)
 			if item.isError {
-				if !errors.Is(err, want) {
+				if !errors.Is(err, errExpected) {
 					if conn != nil {
 						conn.Release()
 					}

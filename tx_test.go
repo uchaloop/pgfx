@@ -99,11 +99,11 @@ func TestTxTransactionCommitsNestedTransaction(t *testing.T) {
 func TestTxTransactionRollsBackNestedTransaction(t *testing.T) {
 	nested := &fakeNativeTx{}
 	root := makeTx(&fakeNativeTx{nested: nested})
-	want := errors.New("callback failed")
+	errExpected := errors.New("callback failed")
 
-	err := root.Transaction(context.Background(), func(*Tx) error { return want })
-	if !errors.Is(err, want) {
-		t.Fatalf("Transaction error = %v, want %v", err, want)
+	err := root.Transaction(context.Background(), func(*Tx) error { return errExpected })
+	if !errors.Is(err, errExpected) {
+		t.Fatalf("Transaction error = %v, want %v", err, errExpected)
 	}
 
 	if nested.commitCalls != 0 || nested.rollbackCalls != 1 {

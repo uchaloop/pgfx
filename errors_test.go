@@ -10,10 +10,10 @@ import (
 
 func TestPostgresErrorClassification(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "23505", ConstraintName: "email_key"}
-	wrapped := fmt.Errorf("insert: %w", pgErr)
-	joined := errors.Join(errors.New("cleanup"), wrapped)
+	errWrapped := fmt.Errorf("insert: %w", pgErr)
+	joined := errors.Join(errors.New("cleanup"), errWrapped)
 
-	for _, err := range []error{pgErr, wrapped, joined} {
+	for _, err := range []error{pgErr, errWrapped, joined} {
 		if AsPgError(err) != pgErr || SQLState(err) != "23505" || !IsSQLState(err, "23505") {
 			t.Fatalf("classification lost PostgreSQL error: %v", err)
 		}

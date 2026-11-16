@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/uchaloop/pgfx"
-	"github.com/uchaloop/pgfx/page"
 	"go.uber.org/fx"
 )
 
@@ -139,30 +138,6 @@ func ExampleDB_FetchValues() {
 	fmt.Println(ids)
 }
 
-func ExampleDB_FetchPage_offsetLimit() {
-	db := makeExampleDB()
-	defer db.Close()
-
-	query := page.MakeQueryOrPanic(
-		`SELECT id, amount, meta FROM orders WHERE amount >= $1`,
-		page.WithTie(page.MakeAscOrder("id")),
-		page.WithSortKeyTag("json"),
-	)
-	result, err := db.FetchPage[order](
-		context.Background(),
-		query,
-		page.Request{Page: 2, Limit: 20, Sort: []string{"amount:desc"}},
-		100,
-	)
-	if err != nil {
-		log.Print(err)
-
-		return
-	}
-
-	fmt.Println(result.List, result.Total)
-}
-
 func ExampleDB_Transaction() {
 	db := makeExampleDB()
 	defer db.Close()
@@ -190,32 +165,6 @@ func ExampleDB_Transaction() {
 	if err != nil {
 		log.Print(err)
 	}
-}
-
-func ExampleTx_FetchPage() {
-	db := makeExampleDB()
-	defer db.Close()
-
-	ctx := context.Background()
-	query := page.MakeQueryOrPanic(`SELECT id, amount, meta FROM orders`, page.WithTie(page.MakeAscOrder("id")))
-	var result page.Result[order]
-	err := db.Transaction(
-		ctx,
-		pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
-		func(tx *pgfx.Tx) error {
-			var err error
-			result, err = tx.FetchPage[order](ctx, query, page.Request{Page: 1, Limit: 20})
-
-			return err
-		},
-	)
-	if err != nil {
-		log.Print(err)
-
-		return
-	}
-
-	fmt.Println(result.List, result.Total) // Read from one explicitly requested snapshot.
 }
 
 func ExampleTx_Transaction() {
@@ -340,7 +289,11 @@ func ExampleMakeModule_poolHooks() {
 		pgfx.MakeModule(pgfx.WithPrepareConn(func(ctx context.Context, conn *pgx.Conn) (bool, error) {
 			_, err := conn.Exec(ctx, "SELECT set_config('statement_timeout', '5s', false)")
 
-			return err == nil, err
+			if err != nil {
+				return false, err
+			}
+
+			return true, nil
 		})),
 		fx.Invoke(registerExampleQuery),
 	)

@@ -39,10 +39,10 @@ func TestMetricsTracerOmitsSQLByDefault(t *testing.T) {
 
 	ctx := WithQueryName(context.Background(), "orders.list")
 	ctx = tracer.TraceQueryStart(ctx, nil, pgx.TraceQueryStartData{SQL: "select secret"})
-	wantErr := errors.New("query failed")
+	errExpected := errors.New("query failed")
 	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{
 		CommandTag: pgconn.NewCommandTag("SELECT 3"),
-		Err:        wantErr,
+		Err:        errExpected,
 	})
 
 	if len(got) != 1 {
@@ -65,8 +65,8 @@ func TestMetricsTracerOmitsSQLByDefault(t *testing.T) {
 		t.Errorf("RowsAffected = %d, want 3", got[0].RowsAffected)
 	}
 
-	if !errors.Is(got[0].Err, wantErr) {
-		t.Errorf("Err = %v, want %v", got[0].Err, wantErr)
+	if !errors.Is(got[0].Err, errExpected) {
+		t.Errorf("Err = %v, want %v", got[0].Err, errExpected)
 	}
 
 	if got[0].Duration < 0 {
@@ -168,20 +168,20 @@ func TestMetricsTracerBatchKeepsStatementError(t *testing.T) {
 	var got QueryMetric
 	tracer := metricsTracer{fn: func(metric QueryMetric) { got = metric }}
 
-	wantErr := errors.New("statement failed")
-	later := errors.New("another statement failed")
+	errExpected := errors.New("statement failed")
+	errLater := errors.New("another statement failed")
 
 	ctx := tracer.TraceBatchStart(context.Background(), nil, pgx.TraceBatchStartData{
 		Batch: makeBatch("select 1"),
 	})
-	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: wantErr})
-	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: later})
+	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: errExpected})
+	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: errLater})
 	tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{})
 
 	// The batch itself ended clean, so the first statement error is what there is
 	// to report.
-	if !errors.Is(got.Err, wantErr) {
-		t.Fatalf("Err = %v, want %v", got.Err, wantErr)
+	if !errors.Is(got.Err, errExpected) {
+		t.Fatalf("Err = %v, want %v", got.Err, errExpected)
 	}
 }
 
@@ -189,17 +189,17 @@ func TestMetricsTracerBatchEndErrorWins(t *testing.T) {
 	var got QueryMetric
 	tracer := metricsTracer{fn: func(metric QueryMetric) { got = metric }}
 
-	statementErr := errors.New("statement failed")
-	wantErr := errors.New("batch failed")
+	errStatement := errors.New("statement failed")
+	errExpected := errors.New("batch failed")
 
 	ctx := tracer.TraceBatchStart(context.Background(), nil, pgx.TraceBatchStartData{
 		Batch: makeBatch("select 1"),
 	})
-	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: statementErr})
-	tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: wantErr})
+	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{Err: errStatement})
+	tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: errExpected})
 
-	if !errors.Is(got.Err, wantErr) {
-		t.Fatalf("Err = %v, want %v", got.Err, wantErr)
+	if !errors.Is(got.Err, errExpected) {
+		t.Fatalf("Err = %v, want %v", got.Err, errExpected)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestMetricsTracerCopyFrom(t *testing.T) {
 		isSQLIncluded: true,
 	}
 
-	wantErr := errors.New("copy failed")
+	errExpected := errors.New("copy failed")
 
 	ctx := WithQueryName(context.Background(), "orders.load")
 	ctx = tracer.TraceCopyFromStart(ctx, nil, pgx.TraceCopyFromStartData{
@@ -293,7 +293,7 @@ func TestMetricsTracerCopyFrom(t *testing.T) {
 	})
 	tracer.TraceCopyFromEnd(ctx, nil, pgx.TraceCopyFromEndData{
 		CommandTag: pgconn.NewCommandTag("COPY 7"),
-		Err:        wantErr,
+		Err:        errExpected,
 	})
 
 	if got.Kind != KindCopyFrom {
@@ -308,8 +308,8 @@ func TestMetricsTracerCopyFrom(t *testing.T) {
 		t.Errorf("RowsAffected = %d, want 7", got.RowsAffected)
 	}
 
-	if !errors.Is(got.Err, wantErr) {
-		t.Errorf("Err = %v, want %v", got.Err, wantErr)
+	if !errors.Is(got.Err, errExpected) {
+		t.Errorf("Err = %v, want %v", got.Err, errExpected)
 	}
 	// A table name is not a statement, so nothing lands in SQL even when the
 	// option is on.

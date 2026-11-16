@@ -139,9 +139,9 @@ func TestFxAfterConnectFailure(t *testing.T) {
 
 	for _, name := range []string{"", "replica"} {
 		t.Run(name, func(t *testing.T) {
-			want := errors.New("type registration failed")
+			errExpected := errors.New("type registration failed")
 			var connection *Connection
-			hook := WithAfterConnect(func(context.Context, *pgx.Conn) error { return want })
+			hook := WithAfterConnect(func(context.Context, *pgx.Conn) error { return errExpected })
 			module := MakeModule(hook)
 			supply := fx.Supply(cfg)
 			invoke := fx.Populate(&connection)
@@ -163,7 +163,7 @@ func TestFxAfterConnectFailure(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			if err := app.Start(ctx); !errors.Is(err, want) {
+			if err := app.Start(ctx); !errors.Is(err, errExpected) {
 				t.Fatalf("Start: %v, want hook error", err)
 			}
 

@@ -11,7 +11,12 @@ func TestEscapeLike(t *testing.T) {
 		{input: `'quote'`, want: `'quote'`},
 	} {
 		if got := EscapeLike(item.input); got != item.want {
-			t.Fatalf("EscapeLike(%q)=%q, want %q", item.input, got, item.want)
+			t.Fatalf(
+				"EscapeLike(%q)=%q, want %q",
+				item.input,
+				got,
+				item.want,
+			)
 		}
 	}
 }

@@ -2,11 +2,8 @@ package pgfx
 
 import (
 	"context"
-	"reflect"
-	"slices"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/uchaloop/pgfx/page"
 )
 
 // querier is the minimal surface needed by the fetch helpers. A pool, a
@@ -65,37 +62,6 @@ func collectOne[T any](
 	return pgx.CollectExactlyOneRow(rows, scan)
 }
 
-// collectPageRows decodes a prepared page using the requested capacity.
-func collectPageRows[T any](ctx context.Context, q querier, statement page.Statement, args []any) ([]T, error) {
-	return collectInto(
-		ctx,
-		q,
-		make([]T, 0, statement.Limit),
-		pgx.RowToStructByNameLax[T],
-		statement.Rows,
-		append(slices.Clip(args), statement.PageArgs...)...,
-	)
-}
-
-func collectPage[T any](ctx context.Context, q querier, query page.Query, req page.Request, args []any) (page.Result[T], error) {
-	statement, err := query.BuildStatement(reflect.TypeFor[T](), req, len(args))
-	if err != nil {
-		return page.Result[T]{}, err
-	}
-
-	rows, err := collectPageRows[T](ctx, q, statement, args)
-	if err != nil {
-		return page.Result[T]{}, err
-	}
-
-	total, err := collectOne(ctx, q, pgx.RowTo[int64], statement.Count, args...)
-	if err != nil {
-		return page.Result[T]{}, err
-	}
-
-	return page.Result[T]{List: rows, Total: total}, nil
-}
-
 func collectOptionalRow[T any](ctx context.Context, q querier, sql string, args ...any) (T, bool, error) {
 	var zero T
 
@@ -106,7 +72,11 @@ func collectOptionalRow[T any](ctx context.Context, q querier, sql string, args 
 	defer rows.Close()
 
 	if !rows.Next() {
-		return zero, false, rows.Err()
+		if err := rows.Err(); err != nil {
+			return zero, false, err
+		}
+
+		return zero, false, nil
 	}
 
 	value, err := pgx.RowToStructByNameLax[T](rows)

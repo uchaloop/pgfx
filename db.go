@@ -5,7 +5,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/uchaloop/pgfx/page"
 )
 
 // DB is a Postgres connection: a pool, and the queries bound to it. It is what
@@ -96,20 +95,6 @@ func (d *DB) FetchValue[T any](ctx context.Context, sql string, args ...any) (T,
 		pgx.RowTo[T],
 		sql,
 		args...,
-	)
-}
-
-// FetchPage returns one numbered page and the total number of base query rows.
-// Page is 1-based. It runs a page SELECT followed by COUNT, even for an empty page.
-// No transaction is created; use a repeatable-read transaction when both queries
-// must observe the same snapshot. Any error returns a zero result.
-func (d *DB) FetchPage[T any](ctx context.Context, query page.Query, req page.Request, args ...any) (page.Result[T], error) {
-	return collectPage[T](
-		ctx,
-		d.Pool,
-		query,
-		req,
-		args,
 	)
 }
 

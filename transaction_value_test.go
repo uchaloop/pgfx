@@ -30,7 +30,7 @@ func (tx *valueNativeTx) Rollback(ctx context.Context) error {
 }
 
 func TestTransactionValue(t *testing.T) {
-	want := errors.New("operation failed")
+	errExpected := errors.New("operation failed")
 
 	for _, item := range []struct {
 		name        string
@@ -41,14 +41,14 @@ func TestTransactionValue(t *testing.T) {
 		wantErr     error
 	}{
 		{name: "success"},
-		{name: "begin", beginErr: want, wantErr: want},
-		{name: "callback", callbackErr: want, wantErr: want},
-		{name: "commit", commitErr: want, wantErr: want},
+		{name: "begin", beginErr: errExpected, wantErr: errExpected},
+		{name: "callback", callbackErr: errExpected, wantErr: errExpected},
+		{name: "commit", commitErr: errExpected, wantErr: errExpected},
 		{
 			name:        "rollback",
-			callbackErr: want,
+			callbackErr: errExpected,
 			rollbackErr: errors.New("rollback failed"),
-			wantErr:     want,
+			wantErr:     errExpected,
 		},
 	} {
 		t.Run(item.name, func(t *testing.T) {

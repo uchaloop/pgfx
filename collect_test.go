@@ -5,13 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/uchaloop/pgfx/page"
 )
 
 type fakeQuerier struct {
@@ -279,22 +277,22 @@ func TestCollectOneErrors(t *testing.T) {
 }
 
 func TestCollectPropagatesQueryError(t *testing.T) {
-	want := errors.New("query failed")
+	errExpected := errors.New("query failed")
 	got, err := collectMany(
 		context.Background(),
-		fakeQuerier{err: want},
+		fakeQuerier{err: errExpected},
 		pgx.RowTo[int64],
 		"select",
 	)
-	if got != nil || err != want {
+	if got != nil || err != errExpected {
 		t.Fatalf("collectMany = %v, %v; want nil and original error", got, err)
 	}
 }
 
 func TestCollectClosesRowsOnScanError(t *testing.T) {
-	want := errors.New("scan failed")
+	errExpected := errors.New("scan failed")
 	rows := makeFakeRows([]string{"id"}, []any{int64(1)})
-	rows.scanErr = want
+	rows.scanErr = errExpected
 
 	_, err := collectMany(
 		context.Background(),
@@ -302,8 +300,8 @@ func TestCollectClosesRowsOnScanError(t *testing.T) {
 		pgx.RowTo[int64],
 		"select",
 	)
-	if !errors.Is(err, want) {
-		t.Fatalf("collectMany error = %v, want %v", err, want)
+	if !errors.Is(err, errExpected) {
+		t.Fatalf("collectMany error = %v, want %v", err, errExpected)
 	}
 
 	if !rows.isClosed {
@@ -316,36 +314,6 @@ type warehouse struct {
 	CityEng string `db:"city_eng" json:"cityEng"`
 }
 
-// scriptedQuerier answers the statements of one page in order and records what
-// it was asked.
-type scriptedQuerier struct {
-	rows []pgx.Rows
-
-	sql  []string
-	args [][]any
-}
-
-func (q *scriptedQuerier) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	q.sql = append(q.sql, sql)
-	q.args = append(q.args, args)
-
-	return q.rows[len(q.sql)-1], nil
-}
-
-func makeWarehouseQuery(t *testing.T) page.Query {
-	t.Helper()
-
-	query, err := page.MakeQuery(
-		"SELECT w.id, w.city_eng FROM warehouses w WHERE w.country = $1;",
-		page.WithTie(page.MakeAscOrder("id")),
-	)
-	if err != nil {
-		t.Fatalf("page.MakeQuery: %v", err)
-	}
-
-	return query
-}
-
 func makeWarehouseRows(ids ...int64) *fakeRows {
 	values := make([][]any, 0, len(ids))
 
@@ -354,107 +322,6 @@ func makeWarehouseRows(ids ...int64) *fakeRows {
 	}
 
 	return makeFakeRows([]string{"id", "city_eng"}, values...)
-}
-
-func TestCollectPageSortsByModelTag(t *testing.T) {
-	q := &scriptedQuerier{rows: []pgx.Rows{makeWarehouseRows(1), makeFakeRows([]string{"count"}, []any{int64(1)})}}
-	query := page.MakeQueryOrPanic(
-		"SELECT w.id, w.city_eng FROM warehouses w WHERE w.country = $1",
-		page.WithTie(page.MakeAscOrder("id")),
-		page.WithSortKeyTag("db"),
-	)
-
-	_, err := collectPage[warehouse](
-		context.Background(),
-		q,
-		query,
-		page.Request{Page: 1, Limit: 5, Sort: []string{"city_eng:desc"}},
-		[]any{"TR"},
-	)
-	if err != nil {
-		t.Fatalf("collectPage: %v", err)
-	}
-
-	// The tie takes the direction of the order before it.
-	want := `ORDER BY "city_eng" DESC, "id" DESC`
-	if !strings.Contains(q.sql[0], want) {
-		t.Fatalf("rows statement = %q, want it to contain %q", q.sql[0], want)
-	}
-}
-
-func TestCollectPageRejectsUnknownSortField(t *testing.T) {
-	q := &scriptedQuerier{}
-
-	_, err := collectPage[warehouse](
-		context.Background(),
-		q,
-		makeWarehouseQuery(t),
-		page.Request{Page: 1, Limit: 5, Sort: []string{"secret"}},
-		[]any{"TR"},
-	)
-	if !errors.Is(err, page.ErrUnknownSortField) {
-		t.Fatalf("err = %v, want ErrUnknownSortField", err)
-	}
-
-	if len(q.sql) != 0 {
-		t.Fatalf("statements = %d, want none", len(q.sql))
-	}
-}
-
-func TestCollectPageRejectsZeroRequest(t *testing.T) {
-	q := &scriptedQuerier{}
-
-	_, err := collectPage[warehouse](
-		context.Background(),
-		q,
-		makeWarehouseQuery(t),
-		page.Request{Page: 1},
-		[]any{"TR"},
-	)
-	if !errors.Is(err, page.ErrInvalidRequest) {
-		t.Fatalf("err = %v, want ErrInvalidRequest", err)
-	}
-
-	if len(q.sql) != 0 {
-		t.Fatalf("statements = %d, want none", len(q.sql))
-	}
-}
-
-// pageRowsTx exercises both page statements through the transaction querier.
-type pageRowsTx struct {
-	pgx.Tx
-	querier *scriptedQuerier
-}
-
-func (t pageRowsTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	return t.querier.Query(ctx, sql, args...)
-}
-func TestTxFetchPage(t *testing.T) {
-
-	for _, n := range []int{0, 1, 2} {
-		columns := []string{"id", "city_eng"}
-
-		values := make([][]any, n)
-
-		for i := range values {
-			values[i] = []any{int64(i + 1), "Istanbul"}
-
-		}
-
-		driver := &scriptedQuerier{rows: []pgx.Rows{makeFakeRows(columns, values...), makeFakeRows([]string{"count"}, []any{int64(10)})}}
-		tx := makeTx(pageRowsTx{querier: driver})
-		q := page.MakeQueryOrPanic("SELECT id,city_eng FROM warehouses", page.WithTie(page.MakeAscOrder("id")))
-		result, err := tx.FetchPage[warehouse](context.Background(), q, page.Request{Page: 1, Limit: 2})
-		if err != nil || len(result.List) != n || result.Total != 10 || len(driver.sql) != 2 {
-			t.Fatalf("result=%v err=%v", result, err)
-		}
-
-		_, err = tx.FetchPage[warehouse](context.Background(), q, page.Request{})
-		if !errors.Is(err, page.ErrInvalidRequest) || len(driver.sql) != 2 {
-			t.Fatalf("invalid request reached driver: %v", err)
-		}
-	}
-
 }
 
 func TestCollectManyEmptyResult(t *testing.T) {
@@ -477,17 +344,17 @@ func TestCollectManyEmptyResult(t *testing.T) {
 func TestCollectManyDiscardsPartialResult(t *testing.T) {
 	for _, stage := range []string{"scan", "iteration"} {
 		t.Run(stage, func(t *testing.T) {
-			want := errors.New("row failed")
+			errExpected := errors.New("row failed")
 			rows := makeFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)})
 			calls := 0
 			scan := func(row pgx.CollectableRow) (int64, error) {
 				calls++
 				if calls == 2 {
 					if stage == "scan" {
-						return 0, want
+						return 0, errExpected
 					}
 					// Surface the iteration error after successful decoding.
-					rows.err = want
+					rows.err = errExpected
 				}
 
 				return pgx.RowTo[int64](row)
@@ -498,7 +365,7 @@ func TestCollectManyDiscardsPartialResult(t *testing.T) {
 				scan,
 				"select",
 			)
-			if got != nil || err != want {
+			if got != nil || err != errExpected {
 				t.Fatalf("collectMany = %v, %v; want nil and original error", got, err)
 			}
 
@@ -536,8 +403,11 @@ func TestCollectManyPreservesQueryInputs(t *testing.T) {
 		q,
 		func(row pgx.CollectableRow) (int64, error) {
 			value, err := pgx.RowTo[int64](row)
+			if err != nil {
+				return 0, err
+			}
 
-			return value * 2, err
+			return value * 2, nil
 		},
 		sql,
 		args...,

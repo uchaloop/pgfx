@@ -35,15 +35,15 @@ func TestTransactionValuePostgres(t *testing.T) {
 			t.Fatalf("savepoint: %d, %v", nested, err)
 		}
 
-		want := errors.New("rollback requested")
+		errExpected := errors.New("rollback requested")
 		failed, err := tx.TransactionValue(ctx, func(child *pgfx.Tx) (int, error) {
 			if _, err := child.Exec(ctx, "INSERT INTO value_test VALUES (2)"); err != nil {
 				return 0, err
 			}
 
-			return 99, want
+			return 99, errExpected
 		})
-		if failed != 0 || !errors.Is(err, want) {
+		if failed != 0 || !errors.Is(err, errExpected) {
 			t.Fatalf("rollback: %d, %v", failed, err)
 		}
 
@@ -56,7 +56,11 @@ func TestTransactionValuePostgres(t *testing.T) {
 	got, err = db.TransactionValue(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) (int, error) {
 		_, err := tx.Exec(ctx, "CREATE TEMP TABLE value_commit_failure (id int UNIQUE DEFERRABLE INITIALLY DEFERRED) ON COMMIT DROP; INSERT INTO value_commit_failure VALUES (1), (1)")
 
-		return 99, err
+		if err != nil {
+			return 0, err
+		}
+
+		return 99, nil
 	})
 	if got != 0 || !pgfx.IsUniqueViolation(err) {
 		t.Fatalf("commit failure: %d, %v", got, err)
@@ -89,15 +93,15 @@ func TestTransactionValuePostgres(t *testing.T) {
 		t.Fatalf("rows after panic: %v, %v", rows, err)
 	}
 
-	want := errors.New("callback failed")
+	errExpected := errors.New("callback failed")
 	got, err = db.TransactionValue(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) (int, error) {
 		if _, err := tx.Exec(ctx, "INSERT INTO value_rollback VALUES (2)"); err != nil {
 			return 0, err
 		}
 
-		return 99, want
+		return 99, errExpected
 	})
-	if got != 0 || !errors.Is(err, want) {
+	if got != 0 || !errors.Is(err, errExpected) {
 		t.Fatalf("callback error: %d, %v", got, err)
 	}
 

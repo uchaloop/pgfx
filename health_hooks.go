@@ -45,8 +45,12 @@ func wrapHealthConnectHooks(cfg *pgxpool.Config) {
 		if hook := connCfg.AfterNetConnect; hook != nil {
 			connCfg.AfterNetConnect = func(ctx context.Context, cfg *pgconn.Config, conn net.Conn) (net.Conn, error) {
 				result, err := hook(ctx, cfg, conn)
+				if err != nil {
+					// pgx closes the returned connection when AfterNetConnect fails.
+					return result, wrapHealthHookError(err)
+				}
 
-				return result, wrapHealthHookError(err)
+				return result, nil
 			}
 		}
 

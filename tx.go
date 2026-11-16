@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/uchaloop/pgfx/page"
 )
 
 // Tx is a Postgres transaction with the same generic fetch methods as DB. It
@@ -97,20 +96,6 @@ func (t *Tx) FetchValue[T any](ctx context.Context, sql string, args ...any) (T,
 		pgx.RowTo[T],
 		sql,
 		args...,
-	)
-}
-
-// FetchPage returns one numbered page and the total number of base query rows.
-// Page is 1-based. It runs a page SELECT followed by COUNT, even for an empty page.
-// No transaction is created; use a repeatable-read transaction when both queries
-// must observe the same snapshot. Any error returns a zero result.
-func (t *Tx) FetchPage[T any](ctx context.Context, query page.Query, req page.Request, args ...any) (page.Result[T], error) {
-	return collectPage[T](
-		ctx,
-		t.Tx,
-		query,
-		req,
-		args,
 	)
 }
 

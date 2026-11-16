@@ -50,12 +50,12 @@ INSERT INTO pgfx_error_child VALUES (1, NULL, 1)`)
 				t.Fatal("expected PostgreSQL error")
 			}
 
-			wrapped := fmt.Errorf("query: %w", err)
-			if !item.isMatch(wrapped) || pgfx.SQLState(wrapped) != item.code {
-				t.Fatalf("classification: %v", wrapped)
+			errWrapped := fmt.Errorf("query: %w", err)
+			if !item.isMatch(errWrapped) || pgfx.SQLState(errWrapped) != item.code {
+				t.Fatalf("classification: %v", errWrapped)
 			}
 
-			if item.code == "23505" && !pgfx.IsConstraint(wrapped, "23505", "pgfx_error_pk") {
+			if item.code == "23505" && !pgfx.IsConstraint(errWrapped, "23505", "pgfx_error_pk") {
 				t.Fatal("constraint lost")
 			}
 		})
@@ -70,7 +70,13 @@ INSERT INTO pgfx_error_child VALUES (1, NULL, 1)`)
 			pgfx.EscapeLike(value),
 		).Scan(&isExact, &isOther)
 		if err != nil || !isExact || isOther {
-			t.Fatalf("literal LIKE %q: %v %v %v", value, isExact, isOther, err)
+			t.Fatalf(
+				"literal LIKE %q: %v %v %v",
+				value,
+				isExact,
+				isOther,
+				err,
+			)
 		}
 	}
 

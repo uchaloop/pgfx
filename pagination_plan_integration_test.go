@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -40,7 +39,7 @@ func TestPagePlans(t *testing.T) {
 		User:     "pagination_lab",
 		Password: secret.New("pagination_lab"),
 		TLS:      TLSConfig{Mode: "disable"},
-		Pool:     PoolConfig{MaxConns: 1},
+		Pool:     PoolConfig{MaxConns: 2},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,77 +52,107 @@ func TestPagePlans(t *testing.T) {
 		Label string         `db:"label"`
 		Meta  map[string]any `db:"meta"`
 	}
-	query := page.MakeQueryOrPanic("SELECT id, score, label, meta FROM bench_rows", page.WithTie(page.MakeAscOrder("id")))
+	const listSQL = "SELECT id, score, label, meta FROM bench_rows ORDER BY id LIMIT $1 OFFSET $2"
+	const countSQL = "SELECT COUNT(*) FROM bench_rows"
 
-	for _, tc := range []struct {
-		name  string
-		page  uint
-		count int
+	for _, mode := range []struct {
+		name string
+		opts []page.Option
 	}{
-		{name: "first", page: 1, count: 20},
-		{name: "deep", page: 90001, count: 20},
-		{name: "empty", page: 100002},
+		{name: "sequential"},
+		{name: "parallel", opts: []page.Option{page.WithParallel()}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := page.Request{Page: tc.page, Limit: 20}
-			var times []float64
-
-			for i := 0; i < 8; i++ {
-				startedAt := time.Now()
-				result, err := db.FetchPage[item](ctx, query, req)
-				elapsed := float64(time.Since(startedAt).Nanoseconds()) / 1e6
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				if result.Total != 2000000 || result.List == nil || len(result.List) != tc.count {
-					t.Fatalf("count=%d total=%d", len(result.List), result.Total)
-				}
-
-				for j, row := range result.List {
-					id := int64((tc.page-1)*20) + int64(j) + 1
-					if row.ID != id || row.Score != id%100000 || row.Label != fmt.Sprintf("row-%d", id) || len(row.Meta) != 2 {
-						t.Fatalf("row=%+v want id=%d", row, id)
-					}
-				}
-
-				if i > 0 {
-					times = append(times, elapsed)
-				}
-			}
-
-			slices.Sort(times)
-			t.Logf("median=%.3fms (page and count)", times[len(times)/2])
-
-			statement, err := query.BuildStatement(reflect.TypeFor[item](), req, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			for _, plan := range []struct {
-				name string
-				sql  string
-				args []any
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name  string
+				page  uint
+				count int
 			}{
-				{name: "rows", sql: statement.Rows, args: statement.PageArgs},
-				{name: "count", sql: statement.Count},
+				{name: "first", page: 1, count: 20},
+				{name: "deep", page: 90001, count: 20},
+				{name: "empty", page: 100002},
 			} {
-				raw, err := db.FetchValue[json.RawMessage](ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+plan.sql, plan.args...)
-				if err != nil {
-					t.Fatal(err)
-				}
+				t.Run(tc.name, func(t *testing.T) {
+					limit := int64(20)
+					offset := int64(tc.page-1) * limit
+					list := func(ctx context.Context) ([]item, error) {
+						return db.FetchRows[item](
+							ctx,
+							listSQL,
+							limit,
+							offset,
+						)
+					}
+					count := func(ctx context.Context) (int64, error) {
+						return db.FetchValue[int64](ctx, countSQL)
+					}
 
-				var plans []struct {
-					Plan map[string]any `json:"Plan"`
-				}
+					var times []float64
 
-				if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 || plans[0].Plan == nil {
-					t.Fatalf("invalid explain result: %s, %v", raw, err)
-				}
+					for i := range 8 {
+						startedAt := time.Now()
+						result, err := page.Fetch(
+							ctx,
+							list,
+							count,
+							mode.opts...,
+						)
+						elapsed := float64(time.Since(startedAt).Nanoseconds()) / 1e6
+						if err != nil {
+							t.Fatal(err)
+						}
 
-				if err := os.WriteFile(fmt.Sprintf("%s/page-%s-%s.json", path, tc.name, plan.name), raw, 0644); err != nil {
-					t.Fatal(err)
-				}
+						if result.Total != 2000000 || result.List == nil || len(result.List) != tc.count {
+							t.Fatalf("count=%d total=%d", len(result.List), result.Total)
+						}
+
+						for j, row := range result.List {
+							id := int64((tc.page-1)*20) + int64(j) + 1
+							if row.ID != id || row.Score != id%100000 || row.Label != fmt.Sprintf("row-%d", id) || len(row.Meta) != 2 {
+								t.Fatalf("row=%+v want id=%d", row, id)
+							}
+						}
+
+						if i > 0 {
+							times = append(times, elapsed)
+						}
+					}
+
+					slices.Sort(times)
+					t.Logf("median=%.3fms (page and count)", times[len(times)/2])
+
+					for _, plan := range []struct {
+						name string
+						sql  string
+						args []any
+					}{
+						{name: "rows", sql: listSQL, args: []any{limit, offset}},
+						{name: "count", sql: countSQL},
+					} {
+						raw, err := db.FetchValue[json.RawMessage](ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+plan.sql, plan.args...)
+						if err != nil {
+							t.Fatal(err)
+						}
+
+						var plans []struct {
+							Plan map[string]any `json:"Plan"`
+						}
+
+						if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 || plans[0].Plan == nil {
+							t.Fatalf("invalid explain result: %s, %v", raw, err)
+						}
+
+						if err := os.WriteFile(fmt.Sprintf(
+							"%s/page-%s-%s-%s.json",
+							path,
+							mode.name,
+							tc.name,
+							plan.name,
+						), raw, 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
 			}
 		})
 	}

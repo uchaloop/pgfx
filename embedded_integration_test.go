@@ -3,7 +3,7 @@
 package pgfx_test
 
 import (
-	"errors"
+	"context"
 	"testing"
 	"time"
 
@@ -28,37 +28,32 @@ func TestEmbeddedStructPaginationIntegration(t *testing.T) {
 		t.Fatalf("decode control: %v, %v", control, err)
 	}
 
-	for _, tc := range []struct {
-		tag  string
-		sort string
-	}{
-		{tag: "db", sort: "x"},
-		{tag: "json", sort: "axisX"},
-	} {
-		t.Run(tc.tag, func(t *testing.T) {
-			q := page.MakeQueryOrPanic(sql, page.WithTie(page.MakeAscOrder("id")), page.WithSortKeyTag(tc.tag))
-			result, err := db.FetchPage[row](ctx, q, page.Request{Page: 1, Limit: 1, Sort: []string{tc.sort}})
-			if err != nil {
-				t.Fatal(err)
-			}
+	for _, offset := range []int{0, 1} {
+		result, err := page.Fetch(
+			ctx,
+			func(ctx context.Context) ([]row, error) {
+				return db.FetchRows[row](
+					ctx,
+					sql+" ORDER BY x, id LIMIT $1 OFFSET $2",
+					1,
+					offset,
+				)
+			},
+			func(ctx context.Context) (int64, error) {
+				return db.FetchValue[int64](ctx, "SELECT COUNT(*) FROM ("+sql+") AS counted")
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			if len(result.List) != 1 || result.List[0].ID != 2 || result.List[0].X != 10 || result.Total != 2 {
-				t.Fatalf("offset: %+v", result)
-			}
+		wantID, wantX := int64(2), int64(10)
+		if offset == 1 {
+			wantID, wantX = 1, 20
+		}
 
-			next, err := db.FetchPage[row](ctx, q, page.Request{Page: 2, Limit: 1, Sort: []string{tc.sort}})
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if len(next.List) != 1 || next.List[0].ID != 1 || next.List[0].X != 20 || next.Total != 2 {
-				t.Fatalf("next page: %+v", next)
-			}
-
-			_, err = db.FetchPage[row](ctx, q, page.Request{Page: 1, Limit: 1, Sort: []string{"point"}})
-			if !errors.Is(err, page.ErrUnknownSortField) {
-				t.Fatalf("embedding tag accepted as column: %v", err)
-			}
-		})
+		if len(result.List) != 1 || result.List[0].ID != wantID || result.List[0].X != wantX || result.Total != 2 {
+			t.Fatalf("page: %+v", result)
+		}
 	}
 }

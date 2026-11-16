@@ -227,14 +227,14 @@ func TestMakeModulePingFailureDoesNotPublishPool(t *testing.T) {
 }
 
 func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
-	want := errors.New("earlier hook failed")
+	errExpected := errors.New("earlier hook failed")
 	var db *Connection
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeValidConfig()),
 		MakeModule(),
 		fx.Invoke(func(lifecycle fx.Lifecycle) {
-			lifecycle.Append(fx.Hook{OnStart: func(context.Context) error { return want }})
+			lifecycle.Append(fx.Hook{OnStart: func(context.Context) error { return errExpected }})
 		}),
 		fx.Populate(&db),
 	)
@@ -242,7 +242,7 @@ func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := app.Start(context.Background()); !errors.Is(err, want) {
+	if err := app.Start(context.Background()); !errors.Is(err, errExpected) {
 		t.Fatalf("Start: %v", err)
 	}
 

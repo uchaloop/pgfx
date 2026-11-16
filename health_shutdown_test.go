@@ -31,16 +31,13 @@ func TestHealthShutdownConcurrentApplicationCalls(t *testing.T) {
 		func() error { return shutdowner.Shutdown() },
 		func() error { return shutdowner.Shutdown(fx.ExitCode(2)) },
 	} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			<-start
 
 			for range 1000 {
 				_ = request()
 			}
-		}()
+		})
 	}
 
 	close(start)
@@ -103,10 +100,10 @@ func TestHealthShutdownExitCodeAndScope(t *testing.T) {
 }
 
 func TestHealthModulePreservesShutdownError(t *testing.T) {
-	expected := errors.New("shutdown failed")
-	base := &failedShutdowner{err: expected}
+	errExpected := errors.New("shutdown failed")
+	base := &failedShutdowner{err: errExpected}
 	s := makeHealthShutdowner(base)
-	if err := s.Shutdown(); !errors.Is(err, expected) {
+	if err := s.Shutdown(); !errors.Is(err, errExpected) {
 		t.Fatal(err)
 	}
 }

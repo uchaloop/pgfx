@@ -43,17 +43,17 @@ func TestMakeDBPingFailure(t *testing.T) {
 		t.Skip("PGFX_TEST_HOST is not set")
 	}
 
-	want := errors.New("test hook failed")
+	errExpected := errors.New("test hook failed")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	db, err := MakeDB(ctx, pgfx.WithAfterConnect(func(context.Context, *pgx.Conn) error { return want }))
+	db, err := MakeDB(ctx, pgfx.WithAfterConnect(func(context.Context, *pgx.Conn) error { return errExpected }))
 	if db != nil {
 		db.Close()
 		t.Fatal("failed pool returned")
 	}
 
-	if !errors.Is(err, want) {
+	if !errors.Is(err, errExpected) {
 		t.Fatalf("MakeDB: %v", err)
 	}
 }

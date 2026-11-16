@@ -54,8 +54,14 @@ func ExampleDB_FetchRowsInto() {
 	}
 
 	rows := make([]row, 0, 8)
+
 	for _, id := range []int64{1, 2} {
-		rows, err = db.FetchRowsInto(ctx, rows[:0], "SELECT $1::bigint AS id", id)
+		rows, err = db.FetchRowsInto(
+			ctx,
+			rows[:0],
+			"SELECT $1::bigint AS id",
+			id,
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -77,8 +83,14 @@ func ExampleDB_FetchValuesInto() {
 	defer db.Close()
 
 	values := make([]int64, 0, 8)
+
 	for _, id := range []int64{1, 2} {
-		values, err = db.FetchValuesInto(ctx, values[:0], "SELECT $1::bigint", id)
+		values, err = db.FetchValuesInto(
+			ctx,
+			values[:0],
+			"SELECT $1::bigint",
+			id,
+		)
 		if err != nil {
 			panic(err)
 		}

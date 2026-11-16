@@ -89,7 +89,12 @@ func TestHealthSQLStatesValidateBeforeConnect(t *testing.T) {
 	}
 
 	var connection *Connection
-	app := fx.New(fx.NopLogger, fx.Supply(cfg), MakeModule(WithHealthSQLStates("bad")), fx.Populate(&connection))
+	app := fx.New(
+		fx.NopLogger,
+		fx.Supply(cfg),
+		MakeModule(WithHealthSQLStates("bad")),
+		fx.Populate(&connection),
+	)
 	if app.Err() == nil {
 		t.Fatal("Fx accepted invalid SQLSTATE")
 	}
@@ -106,9 +111,9 @@ func TestHealthSQLStatesReusableOption(t *testing.T) {
 }
 
 func TestHealthHookErrorContract(t *testing.T) {
-	original := errors.New("hook failed")
-	wrapped := wrapHealthHookError(original)
-	if !errors.Is(wrapped, original) || wrapped.Error() != original.Error() {
+	errOriginal := errors.New("hook failed")
+	wrapped := wrapHealthHookError(errOriginal)
+	if !errors.Is(wrapped, errOriginal) || wrapped.Error() != errOriginal.Error() {
 		t.Fatal("hook error contract changed")
 	}
 	if wrapHealthHookError(nil) != nil {

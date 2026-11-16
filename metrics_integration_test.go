@@ -168,8 +168,8 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 		t.Errorf("copy SQL = %q, want empty", copyMetric.SQL)
 	}
 
-	wantRewriteErr := errors.New("rewrite failed")
-	wantCallbackErr := errors.New("callback failed")
+	errRewrite := errors.New("rewrite failed")
+	errCallback := errors.New("callback failed")
 
 	for _, tc := range []struct {
 		name    string
@@ -180,11 +180,11 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 			name: "early_error",
 			batch: func() *pgx.Batch {
 				b := &pgx.Batch{}
-				b.Queue("select 1", failingMetricsRewriter{err: wantRewriteErr})
+				b.Queue("select 1", failedMetricsRewriter{err: errRewrite})
 
 				return b
 			}(),
-			wantErr: wantRewriteErr,
+			wantErr: errRewrite,
 		},
 		{
 			name:    "execution_error",
@@ -209,11 +209,11 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 			name: "callback_error",
 			batch: func() *pgx.Batch {
 				b := makeBatch("select 1")
-				b.QueuedQueries[0].Exec(func(pgconn.CommandTag) error { return wantCallbackErr })
+				b.QueuedQueries[0].Exec(func(pgconn.CommandTag) error { return errCallback })
 
 				return b
 			}(),
-			wantErr: wantCallbackErr,
+			wantErr: errCallback,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,19 +229,19 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 			mu.Lock()
 			defer mu.Unlock()
 
-			var found []QueryMetric
+			var matchedMetrics []QueryMetric
 
 			for _, m := range metrics {
 				if m.Name == tc.name {
-					found = append(found, m)
+					matchedMetrics = append(matchedMetrics, m)
 				}
 			}
 
-			if len(found) != 1 {
-				t.Fatalf("metrics = %+v, want exactly one", found)
+			if len(matchedMetrics) != 1 {
+				t.Fatalf("metrics = %+v, want exactly one", matchedMetrics)
 			}
 
-			m := found[0]
+			m := matchedMetrics[0]
 			if m.Kind != KindBatch || m.Err == nil || tc.wantErr != nil && !errors.Is(m.Err, tc.wantErr) {
 				t.Fatalf("unexpected error metric: %+v", m)
 			}
@@ -268,21 +268,22 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		var found []QueryMetric
+		var matchedMetrics []QueryMetric
 
 		for _, m := range metrics {
 			if m.Name == "copy_error" {
-				found = append(found, m)
+				matchedMetrics = append(matchedMetrics, m)
 			}
 		}
 
-		if len(found) != 1 {
-			t.Fatalf("metrics = %+v, want exactly one", found)
+		if len(matchedMetrics) != 1 {
+			t.Fatalf("metrics = %+v, want exactly one", matchedMetrics)
 		}
 
-		var pgErr *pgconn.PgError
-		m := found[0]
-		if m.Kind != KindCopyFrom || !errors.As(m.Err, &pgErr) || pgErr.Code != "23505" || len(m.SQL) != 0 {
+		m := matchedMetrics[0]
+		pgErr, isPgError := errors.AsType[*pgconn.PgError](m.Err)
+
+		if m.Kind != KindCopyFrom || !isPgError || pgErr.Code != "23505" || len(m.SQL) != 0 {
 			t.Fatalf("unexpected COPY error metric: %+v", m)
 		}
 	})
@@ -312,8 +313,8 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 	})
 }
 
-type failingMetricsRewriter struct{ err error }
+type failedMetricsRewriter struct{ err error }
 
-func (r failingMetricsRewriter) RewriteQuery(context.Context, *pgx.Conn, string, []any) (string, []any, error) {
+func (r failedMetricsRewriter) RewriteQuery(context.Context, *pgx.Conn, string, []any) (string, []any, error) {
 	return "", nil, r.err
 }

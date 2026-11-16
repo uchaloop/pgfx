@@ -10,7 +10,7 @@ and sensitive data from code, logs and connection settings.
 
 Keep the change focused and explain the problem it solves. Add a regression test
 for bug fixes and tests for new behavior. Update examples and documentation when
-public behavior changes, and add user-visible changes and migration instructions
+public behavior changes, and record user-visible changes
 under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
 
 Run the local checks below and PostgreSQL tests for database-related changes.
@@ -40,14 +40,6 @@ compiled but require an `orders` schema to execute; examples with `Output`
 comments run as part of `go test`. The standalone and Fx onboarding programs
 are runnable against an empty database as described in [Quick start](README.md#quick-start).
 
-For allocation measurements without race instrumentation:
-
-```sh
-go test -run '^$' -bench BenchmarkCollectPageRowsCapacity -benchmem .
-```
-
-Measure representative row types and limits; capacity choices are workload-dependent.
-
 ## PostgreSQL integration tests
 
 Use a disposable database: the integration tests create and drop test tables.
@@ -68,7 +60,17 @@ interpret a skipped test as a verified database scenario.
 Tests using `pgfx/test` share the same connection variables and manage their own
 fixtures. For use in your application, see [Testing](README.md#testing).
 The integration suite also executes the optional-row, buffer-reuse and
-transaction-value examples through `TestDocumentationExamples`.
+transaction-value examples through `TestDocumentationExamples`. The three
+[page.Fetch examples](page/example_test.go) run through `TestPageExamples` in
+the page package. They use `generate_series` and need no application tables.
+Sequential and transaction examples use one pooled connection; the parallel
+example allows two.
+
+To run only the pagination examples with the same environment:
+
+```sh
+go test -count=1 -race -tags=integration -run '^TestPageExamples$' -v ./page
+```
 
 ## Additional checks
 
@@ -106,15 +108,19 @@ match the test helper. `PGFX_PAGE_TEST_HOST` is required; there is no fallback
 to `PGFX_TEST_HOST`. `PGFX_PAGE_PLAN_DIR` must already exist. These credentials
 and disabled TLS are only for the disposable lab.
 
-Expected: three passing subtests (`first`, `deep`, `empty`) and six
-`page-{first,deep,empty}-{rows,count}.json` EXPLAIN artifacts. With Limit=20 and
-ID ascending, the cases cover Page=1, Page=90001 (OFFSET=1800000), and
-Page=100002 (past the end). Each verifies the returned list and Total=2000000;
-the empty page must still return the total. Both generated statements are
-explained. Plans are observations, not requirements for a particular scan type.
+Expected: six passing leaf subtests (`sequential/first`, `sequential/deep`,
+`sequential/empty`, `parallel/first`, `parallel/deep`, `parallel/empty`) and twelve
+`page-{sequential,parallel}-{first,deep,empty}-{rows,count}.json` EXPLAIN artifacts.
+With a limit of 20 and ID ascending, the cases cover offset 0, offset 1800000,
+and offset 2000020 (past the end). Each verifies the returned list and
+Total=2000000; the empty page must still return the total. Both application-owned
+statements are explained. Plans are observations, not requirements for a
+particular scan type.
 
-The test reports median FetchPage latency after warmup, including the row and
-count queries, network and decoding. Run performance checks without `-race`;
+The test reports median page.Fetch latency after warmup, including the row and
+count callbacks, queries, network and decoding in each mode. Parallel calls
+require pool capacity for concurrent queries; they do not guarantee a speedup.
+Run performance checks without `-race`;
 use the separate integration command for race checks. Measurements are not
 cold-cache results or performance guarantees. Record PostgreSQL version,
 hardware, cache conditions, indexes and dataset when comparing runs. Inspect

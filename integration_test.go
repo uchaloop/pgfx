@@ -89,16 +89,16 @@ func TestPostgresIntegration(t *testing.T) {
 		1,
 	)
 
-	wantRollback := errors.New("rollback requested")
+	errRollback := errors.New("rollback requested")
 	err = db.Transaction(ctx, pgx.TxOptions{}, func(tx *Tx) error {
 		if _, execErr := tx.Exec(ctx, "insert into "+table+" (id) values (2)"); execErr != nil {
 			return execErr
 		}
 
-		return wantRollback
+		return errRollback
 	})
-	if !errors.Is(err, wantRollback) {
-		t.Fatalf("rolled-back Tx error = %v, want %v", err, wantRollback)
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back Tx error = %v, want %v", err, errRollback)
 	}
 
 	requireIntegrationCount(

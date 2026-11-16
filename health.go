@@ -91,15 +91,19 @@ func runHealthMonitor(
 			logger.WarnContext(
 				ctx,
 				"database health check failed",
-				"category", category,
-				"sqlstate", code,
+				"category",
+				category,
+				"sqlstate",
+				code,
 			)
 		case checkedAt.Sub(failedAt) >= cfg.FailureAfter:
 			logger.ErrorContext(
 				ctx,
 				"database health shutdown requested",
-				"category", category,
-				"sqlstate", code,
+				"category",
+				category,
+				"sqlstate",
+				code,
 			)
 			if err := shutdown(); err != nil {
 				logger.ErrorContext(ctx, "database health shutdown request failed")

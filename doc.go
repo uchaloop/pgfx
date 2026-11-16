@@ -78,29 +78,30 @@ for multiple returned columns. Native pgx operations remain available directly.
 
 # Pagination
 
-[DB.FetchPage] uses [page.Request] for numbered LIMIT/OFFSET pages and returns
-[page.Result] with List and Total. The same method is available on Tx. Each
-successful call executes the row SELECT followed by a separate COUNT over the
-same base SELECT and filter arguments. An empty page still returns the total;
-a failure returns a zero result and an error.
+[github.com/uchaloop/pgfx/page.Fetch] combines list and count callbacks into [github.com/uchaloop/pgfx/page.Result], with List
+and Total (int64). By default it calls list then count, even for an empty list.
+A callback error returns a zero result; a successful nil list becomes non-nil
+and empty. The context and both callbacks must be non-nil.
 
-Build a reusable [page.Query] from a SELECT with columns, joins and filters,
-without top-level ORDER BY, LIMIT or OFFSET. Filter arguments start at $1.
-See the page package for sorting, query construction and request validation.
+[github.com/uchaloop/pgfx/page.WithParallel] explicitly runs both callbacks concurrently. Pass the callback
+context to queries so cancellation reaches them. The first recorded callback
+error cancels the sibling; Fetch waits for both callbacks before returning that
+error with a zero result. Callbacks must cooperate with cancellation. Never run
+parallel callbacks on the same transaction or connection. Pool-backed callbacks
+can acquire separate connections; account for the additional pool demand.
 
-FetchPage reserves Limit elements, including for empty pages. The application
-must validate an appropriate maximum page size; there is no internal capacity cap.
-Deep offsets scan skipped rows and the exact count covers the complete base result.
+The application owns SQL, filter arguments, request validation, maximum page
+size, offset arithmetic and sort whitelists. Keep list and count filters
+consistent, preserving DISTINCT, grouping and join semantics in the count.
+Parameterize values and never interpolate raw client sort text. Use a unique
+order for stable pages. Matching indexes can support ordering, but execution
+plans depend on predicates and NULL placement. Deep offsets scan skipped rows
+and an exact count covers the complete base result.
 
-Sort keys must be selected output columns, with a unique [page.WithTie] order.
-Use [page.WithSortable] or [page.WithSortKeyTag] to allow client sorting; the latter
-requires explicit db tags. Matching indexes can support ordering, but execution
-plans depend on predicates and NULL placement.
-
-Pagination does not create a transaction. Concurrent writes can make its two
+Pagination does not create a transaction. Concurrent writes can make the two
 queries observe different snapshots, including in a READ COMMITTED transaction.
-To read the list and total from one snapshot, use an explicit transaction with
-pgx.RepeatableRead and [Tx.FetchPage].
+For one snapshot, use an explicit pgx.RepeatableRead transaction with sequential
+page.Fetch callbacks that both query its Tx. Do not use page.WithParallel there.
 
 # Transactions
 
