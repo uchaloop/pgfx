@@ -5,7 +5,6 @@ package pgfx
 import (
 	"context"
 	"errors"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,12 +16,7 @@ import (
 
 func makePoolHooksTestDB(t *testing.T, mode string, opts ...Option) *DB {
 	t.Helper()
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	cfg := makeIntegrationConfig(host, time.Second)
+	cfg := makeIntegrationConfig(t, time.Second)
 	cfg.Pool.MaxConns = 1
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

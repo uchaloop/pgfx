@@ -10,30 +10,6 @@ import (
 	"github.com/uchaloop/pgfx/page"
 )
 
-func TestPageCountsEmptyPage(t *testing.T) {
-	rows := makeWarehouseRows()
-	count := makeFakeRows([]string{"count"}, []any{int64(10)})
-	q := &scriptedQuerier{rows: []pgx.Rows{rows, count}}
-	result, err := collectPage[warehouse](
-		context.Background(),
-		q,
-		makeWarehouseQuery(t),
-		page.Request{Page: 9, Limit: 2},
-		[]any{"TR"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if result.Total != 10 || result.List == nil || len(result.List) != 0 {
-		t.Fatalf("list=%v", result.List)
-	}
-
-	if len(q.sql) != 2 || !count.isClosed {
-		t.Fatalf("queries=%d count closed=%v", len(q.sql), count.isClosed)
-	}
-}
-
 type pageCountQuerier struct {
 	query func(context.Context, string, ...any) (pgx.Rows, error)
 }

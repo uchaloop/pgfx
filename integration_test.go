@@ -16,12 +16,7 @@ import (
 )
 
 func TestPostgresIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	cfg := makeIntegrationConfig(host, 5*time.Second)
+	cfg := makeIntegrationConfig(t, 5*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -116,15 +111,10 @@ func TestPostgresIntegration(t *testing.T) {
 }
 
 func TestFxLifecycleIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	var connection *Connection
 	app := fx.New(
 		fx.NopLogger,
-		fx.Supply(makeIntegrationConfig(host, 5*time.Second)),
+		fx.Supply(makeIntegrationConfig(t, 5*time.Second)),
 		MakeModule(),
 		fx.Invoke(func(lc fx.Lifecycle, got *Connection) {
 			connection = got
@@ -268,7 +258,14 @@ func requireIntegrationCount(
 	}
 }
 
-func makeIntegrationConfig(host string, connect time.Duration) Config {
+func makeIntegrationConfig(t *testing.T, connect time.Duration) Config {
+	t.Helper()
+
+	host := os.Getenv("PGFX_TEST_HOST")
+	if len(host) == 0 {
+		t.Skip("PGFX_TEST_HOST is not set")
+	}
+
 	return Config{
 		Host:     host,
 		Database: testEnv("PGFX_TEST_DATABASE", "pgfx_test"),

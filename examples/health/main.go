@@ -28,7 +28,7 @@ func main() {
 	fx.New(
 		pgfx.HealthModule,
 		fx.Supply(cfg),
-		pgfx.MakeModule(),
+		pgfx.MakeModule(pgfx.WithHealthSQLStates(pgfx.DefaultHealthSQLStates()...)),
 		fx.Invoke(registerQuery),
 	).Run()
 }

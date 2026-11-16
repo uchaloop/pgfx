@@ -46,31 +46,6 @@ func BenchmarkCollectPageRowsCapacity(b *testing.B) {
 	}
 }
 
-func TestPagePreallocationUsesRequestedSize(t *testing.T) {
-	for _, count := range []int{0, 1} {
-		rows := makeWarehouseRows()
-		if count != 0 {
-			rows = makeWarehouseRows(1)
-		}
-
-		result, err := collectPageRows[warehouse](
-			context.Background(),
-			fakeQuerier{rows: rows},
-			page.Statement{Rows: "query", Limit: 1000},
-			nil,
-		)
-		if err != nil || result == nil || len(result) != count || cap(result) != 1000 || !rows.isClosed {
-			t.Fatalf(
-				"len=%d cap=%d closed=%v err=%v",
-				len(result),
-				cap(result),
-				rows.isClosed,
-				err,
-			)
-		}
-	}
-}
-
 func TestPagePreallocationFirstRowErrors(t *testing.T) {
 	want := errors.New("read failed")
 

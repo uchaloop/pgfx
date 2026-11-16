@@ -13,6 +13,7 @@ import (
 // options holds the runtime dependencies of a connection - everything that is
 // not serializable configuration. They are supplied through Option.
 type options struct {
+	healthSQLStates     []string
 	isTLSOverride       bool
 	tlsConfig           *tls.Config
 	isTraceEnabled      bool

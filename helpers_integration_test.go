@@ -3,30 +3,16 @@
 package pgfx_test
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/uchaloop/pgfx"
-	pgfxtest "github.com/uchaloop/pgfx/test"
 )
 
 func TestErrorClassificationPostgres(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
+	defer cleanup()
 
 	conn, err := db.Acquire(ctx)
 	if err != nil {

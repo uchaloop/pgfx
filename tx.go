@@ -140,21 +140,9 @@ func (t *Tx) Transaction(ctx context.Context, fn func(*Tx) error) error {
 // Any error returns the zero value of T and the transaction error unchanged.
 // Callback, rollback and panic semantics match Transaction.
 func (t *Tx) TransactionValue[T any](ctx context.Context, fn func(*Tx) (T, error)) (T, error) {
-	var value T
-
-	err := t.Transaction(ctx, func(tx *Tx) error {
-		var err error
-		value, err = fn(tx)
-
-		return err
-	})
-	if err != nil {
-		var zero T
-
-		return zero, err
-	}
-
-	return value, nil
+	return transactionValue(func(callback func(*Tx) error) error {
+		return t.Transaction(ctx, callback)
+	}, fn)
 }
 
 // FetchOptionalRow decodes at most one struct row, using the same mapping as

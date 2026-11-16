@@ -245,12 +245,7 @@ func TestHealthPostgresRestart(t *testing.T) {
 
 func makeHealthIntegrationConfig(t *testing.T) Config {
 	t.Helper()
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	cfg := makeIntegrationConfig(host, time.Second)
+	cfg := makeIntegrationConfig(t, time.Second)
 	cfg.Pool.MaxConns = 1
 	cfg.Health = HealthConfig{
 		IsEnabled:    true,
@@ -269,7 +264,7 @@ func makeHealthTestApp(cfg Config, name string, connection **Connection, logs *b
 			fx.NopLogger,
 			HealthModule,
 			fx.Supply(cfg, logger),
-			MakeModule(),
+			MakeModule(WithHealthSQLStates(DefaultHealthSQLStates()...)),
 			fx.Populate(connection),
 		)
 	}
@@ -278,7 +273,7 @@ func makeHealthTestApp(cfg Config, name string, connection **Connection, logs *b
 		fx.NopLogger,
 		HealthModule,
 		fx.Supply(fx.Annotate(cfg, fx.ResultTags(`name:"`+name+`"`)), logger),
-		MakeModuleFor(name),
+		MakeModuleFor(name, WithHealthSQLStates(DefaultHealthSQLStates()...)),
 		fx.Invoke(fx.Annotate(func(c *Connection) { *connection = c }, fx.ParamTags(`name:"`+name+`"`))),
 	)
 }
@@ -290,7 +285,7 @@ func TestHealthFxMultiplePools(t *testing.T) {
 		fx.NopLogger,
 		HealthModule,
 		fx.Supply(cfg, fx.Annotate(cfg, fx.ResultTags(`name:"replica"`))),
-		MakeModule(),
+		MakeModule(WithHealthSQLStates(DefaultHealthSQLStates()...)),
 		MakeModuleFor("replica"),
 		fx.Invoke(fx.Annotate(func(p, r *Connection) { primary, replica = p, r }, fx.ParamTags(``, `name:"replica"`))),
 	)

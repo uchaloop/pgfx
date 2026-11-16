@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -17,15 +16,10 @@ import (
 )
 
 func TestFxAfterConnectTypes(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	cfg := makeIntegrationConfig(host, time.Second)
+	cfg := makeIntegrationConfig(t, time.Second)
 	cfg.Pool.MaxConns = 2
 	admin, err := MakeDB(ctx, cfg)
 	if err != nil {
@@ -140,17 +134,13 @@ func TestFxAfterConnectTypes(t *testing.T) {
 }
 
 func TestFxAfterConnectFailure(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
+	cfg := makeIntegrationConfig(t, time.Second)
+	cfg.Pool.MaxConns = 1
 
 	for _, name := range []string{"", "replica"} {
 		t.Run(name, func(t *testing.T) {
 			want := errors.New("type registration failed")
 			var connection *Connection
-			cfg := makeIntegrationConfig(host, time.Second)
-			cfg.Pool.MaxConns = 1
 			hook := WithAfterConnect(func(context.Context, *pgx.Conn) error { return want })
 			module := MakeModule(hook)
 			supply := fx.Supply(cfg)
@@ -189,15 +179,10 @@ func TestFxAfterConnectFailure(t *testing.T) {
 }
 
 func TestFxAfterConnectCancellation(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	entered := make(chan struct{}, 1)
 	finished := make(chan struct{}, 1)
 	var connection *Connection
-	cfg := makeIntegrationConfig(host, 100*time.Millisecond)
+	cfg := makeIntegrationConfig(t, 100*time.Millisecond)
 	cfg.Pool.MaxConns = 1
 	app := fx.New(
 		fx.NopLogger,
@@ -243,16 +228,11 @@ func TestFxAfterConnectCancellation(t *testing.T) {
 }
 
 func TestFxOptionsOverrideInjectedDefaults(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	var injected, explicit atomic.Int64
 	var connection *Connection
 	app := fx.New(
 		fx.NopLogger,
-		fx.Supply(makeIntegrationConfig(host, time.Second)),
+		fx.Supply(makeIntegrationConfig(t, time.Second)),
 		fx.Supply(QueryMetricFunc(func(QueryMetric) { injected.Add(1) })),
 		MakeModule(
 			WithQueryMetrics(func(QueryMetric) { explicit.Add(1) }),

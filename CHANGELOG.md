@@ -9,87 +9,30 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [0.10.0] - 2026-11-15
 
-This release contains breaking API changes. See Migration from 0.9.1 below.
+This release contains breaking API changes. See the
+[migration guide from 0.9.1](docs/migration-0.10.0.md).
 
 ### Added
 
-- `FetchOptionalRow` for optional struct results and `TransactionValue` for
-  typed transaction results, on both `DB` and `Tx`.
-- PostgreSQL error classification with `AsPgError`, `SQLState`, `IsSQLState`,
-  `IsConstraint` and common error predicates; `EscapeLike` for literal LIKE/ILIKE searches.
-- `pgfx/test` for ready-to-use test connections, with `PGFX_TEST_MAX_CONNS`
-  to control pool size. Tests retain ownership of cleanup and data isolation.
-- Runtime options on Fx modules, including type registration with `WithAfterConnect`.
-  New pool hooks: `WithPrepareConn`, `WithAfterRelease`, `WithBeforeClose` and `WithShouldPing`.
-- Optional Fx health checks with recovery detection, transition logs and shutdown
-  after sustained failures. Add `HealthModule` once at the application root for
-  coordinated shutdown; standalone `MakeDB` does not run health checks.
+- `FetchOptionalRow` and `TransactionValue` on `DB` and `Tx`.
+- PostgreSQL error classification, constraint matching and `EscapeLike`.
+- `pgfx/test` connections with configurable pool size; tests own cleanup and isolation.
+- Runtime options on Fx modules, including type registration and pool lifecycle hooks.
+- Optional Fx health monitoring with per-connection SQLSTATE policies and shutdown
+  after sustained failures. Requires `HealthModule`; standalone `MakeDB` does not monitor.
 
 ### Changed
 
-- `FetchPage` accepts `Page`/`Limit` and returns only `List` and `Total`, always
-  counting matches even on empty pages. Its two queries do not implicitly share
-  a transaction or snapshot.
-- Fx modules provide a lifecycle-owned `*Connection` instead of `*DB`.
-- Constructors and page options use `Make`/`With` names; `BuildStatement`
-  replaces `BuildRows`. See the migration table below.
+- `FetchPage` uses `Page`/`Limit` and returns `List`/`Total`, counting even empty pages.
+  The row and count queries do not implicitly share a transaction or snapshot.
+- Fx modules provide a lifecycle-owned `*Connection`; callers must not close its DB.
+- Constructors and page options use `Make`/`With`; `BuildStatement` replaces `BuildRows`.
 - `WithSortKeyTag` requires explicit `db` tags for sortable fields.
 
 ### Removed
 
-- Cursor pagination and lookahead results.
-- `FetchPageRows`, `FetchTotal`, `Query.Build`, `Query.BuildCount`,
-  `Query.BuildAfter` and `CountSQL`. Use `FetchPage` or `Query.BuildStatement`.
-
-### Migration from 0.9.1
-
-There are no compatibility aliases for renamed APIs.
-
-- Replace the `pgfx.Module` option variable with `pgfx.MakeModule()`. To register
-  types, pass `pgfx.WithAfterConnect(registerTypes)` to `MakeModule` or `MakeModuleFor`.
-  Explicit options apply after injected tracing and metrics defaults.
-
-| Previous name | Current name |
-| --- | --- |
-| `pgfx.Make` | `pgfx.MakeDB` |
-| `page.Make` | `page.MakeQuery` |
-| `pgfx.WithTracing` | `pgfx.WithTrace` |
-| `page.Order.Desc` | `page.Order.IsDesc` |
-| `page.Statements` | `page.Statement` |
-| `page.Statements.PagingArgs` | `page.Statement.PageArgs` |
-| `pgfx.Module` | `pgfx.MakeModule()` |
-| `pgfx.ModuleFor` | `pgfx.MakeModuleFor` |
-| `page.Asc` / `page.Desc` | `page.MakeAscOrder` / `page.MakeDescOrder` |
-| `page.Must` | `page.MakeQueryOrPanic` |
-| `page.Head` / `page.Tie` | `page.WithHead` / `page.WithTie` |
-| `page.Sortable` | `page.WithSortable` |
-| `page.SortKeyTag` | `page.WithSortKeyTag` |
-| `Query.BuildRows` | `Query.BuildStatement` |
-
-Response serialization remains the application's responsibility.
-
-- Replace `Request.Number` / `Request.Size` with `Page` / `Limit`.
-- `FetchPage` changes from `([]T, uint, error)` to `(page.Result[T], error)`.
-  The result contains only `List []T` and `Total int64`; update response DTOs
-  and page-count calculations that previously used a `uint` total.
-  Replace `FetchPageRows` with `FetchPage` on both `DB` and `Tx`. Remove adapters
-  for lookahead flags and cursor responses; pagination metadata can be derived by the
-  application from the request and total when needed.
-- `FetchAfter`, cursor request/result/statement types and cursor errors are
-  removed. Migrate callers to numbered pages with `FetchPage`.
-- Replace `Query.Build` with `BuildStatement`. `Statement` carries `Rows`, `Count`,
-  `PageArgs` and `Limit`. The former `Statements.Offset` field is removed.
-  `PageArgs` contains `Limit` and `Offset`, not the former `Limit+1` and `Offset`;
-  there is no lookahead row. Append PageArgs only to the row query's filter
-  arguments; execute Count with the original filter arguments alone.
-- `BuildCount`, `CountSQL` and `FetchTotal` are removed. FetchPage performs the
-  count automatically, including on empty pages. It does not create a transaction;
-  use `Tx.FetchPage` under REPEATABLE READ for one snapshot across both queries.
-- Inject `*pgfx.Connection` in Fx consumers and call `DB()` in their `OnStart`
-  hook or after startup. Do not close the borrowed database. `MakeDB` still
-  returns an owned database that the caller closes.
-- Add explicit `db` tags for fields exposed through `WithSortKeyTag`, or use an
-  explicit `WithSortable` mapping.
+- Cursor pagination, lookahead results and separate pagination/count helpers.
+  Use `FetchPage` or `Query.BuildStatement`; renamed APIs have no compatibility aliases.
 
 ## [0.9.1] - 2026-10-01
 

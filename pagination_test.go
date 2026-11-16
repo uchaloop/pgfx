@@ -19,7 +19,8 @@ func TestPageAlwaysCounts(t *testing.T) {
 				data.values = append(data.values, []any{int64(i + 1), "Istanbul"})
 			}
 
-			driver := &scriptedQuerier{rows: []pgx.Rows{data, makeFakeRows([]string{"count"}, []any{int64(10)})}}
+			count := makeFakeRows([]string{"count"}, []any{int64(10)})
+			driver := &scriptedQuerier{rows: []pgx.Rows{data, count}}
 			result, err := collectPage[warehouse](
 				context.Background(),
 				driver,
@@ -33,6 +34,10 @@ func TestPageAlwaysCounts(t *testing.T) {
 
 			if len(result.List) != n || result.Total != 10 || !data.isClosed {
 				t.Fatalf("result=%+v closed=%v", result, data.isClosed)
+			}
+
+			if !count.isClosed {
+				t.Fatal("count rows were not closed")
 			}
 
 			if result.List == nil {

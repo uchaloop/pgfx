@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -23,11 +22,6 @@ func TestQueryMetricsIntegration(t *testing.T) {
 }
 
 func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	var (
 		mu      sync.Mutex
 		metrics []QueryMetric
@@ -46,7 +40,7 @@ func testQueryMetricsIntegration(t *testing.T, opts ...Option) {
 	opts = append(opts, WithQueryMetrics(collect), WithSQLInQueryMetrics(true))
 	db, err := MakeDB(
 		ctx,
-		makeIntegrationConfig(host, 5*time.Second),
+		makeIntegrationConfig(t, 5*time.Second),
 		opts...,
 	)
 	if err != nil {

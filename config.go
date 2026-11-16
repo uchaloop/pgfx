@@ -192,6 +192,10 @@ func resolveEndpoint(endpoint string) (string, uint16, error) {
 // poolConfig builds a *pgxpool.Config from cfg and the runtime opts. The
 // password is set on the connection config directly, never placed in the DSN.
 func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
+	if err := validateHealthSQLStates(opts.healthSQLStates); err != nil {
+		return nil, err
+	}
+
 	host, port, err := resolveEndpoint(cfg.Host)
 	if err != nil {
 		return nil, err
@@ -278,6 +282,8 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 		poolCfg.ConnConfig.TLSConfig = opts.tlsConfig
 		poolCfg.ConnConfig.Fallbacks = nil
 	}
+
+	wrapHealthConnectHooks(poolCfg)
 
 	return poolCfg, nil
 }

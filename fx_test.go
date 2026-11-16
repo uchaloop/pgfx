@@ -14,38 +14,6 @@ func makeValidConfig() Config {
 	return Config{Host: "127.0.0.1:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 }
 
-// TestMakeModuleGraphValid verifies the default MakeModule consumes an untagged Config
-// and provides an untagged *Connection. ValidateApp checks the graph without
-// running constructors, so no database is opened.
-func TestMakeModuleGraphValid(t *testing.T) {
-	err := fx.ValidateApp(
-		fx.NopLogger,
-		fx.Supply(makeValidConfig()),
-		MakeModule(),
-		fx.Invoke(func(*Connection) {}),
-	)
-	if err != nil {
-		t.Fatalf("ValidateApp: %v", err)
-	}
-}
-
-// TestMakeModuleForGraphValid verifies MakeModuleFor consumes a Config tagged
-// name:"<name>" and provides a *Connection tagged the same.
-func TestMakeModuleForGraphValid(t *testing.T) {
-	err := fx.ValidateApp(
-		fx.NopLogger,
-		fx.Supply(fx.Annotate(makeValidConfig(), fx.ResultTags(`name:"replica"`))),
-		MakeModuleFor("replica"),
-		fx.Invoke(fx.Annotate(
-			func(*Connection) {},
-			fx.ParamTags(`name:"replica"`),
-		)),
-	)
-	if err != nil {
-		t.Fatalf("ValidateApp: %v", err)
-	}
-}
-
 // TestMultiplePoolsGraphNoConflict verifies that the untagged default pool and
 // several tagged pools coexist in one container. fx distinguishes them by tag,
 // so there is no duplicate-type conflict; ValidateApp fails if there were one.

@@ -5,31 +5,18 @@ package pgfx_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/uchaloop/pgfx"
-	pgfxtest "github.com/uchaloop/pgfx/test"
 )
 
 func TestTransactionValuePostgres(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	t.Setenv("PGFX_TEST_MAX_CONNS", "1")
 
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
+	defer cleanup()
 
 	if db.Config().MaxConns != 1 {
 		t.Fatalf("max connections = %d, want 1", db.Config().MaxConns)

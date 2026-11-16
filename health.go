@@ -13,11 +13,16 @@ import (
 //
 // Checks run sequentially after the startup Ping, with Interval before the first
 // check and between completed checks. Timeout includes pool acquisition. The
-// first completed failure starts the failure window; any success resets it.
-// A subsequent failed check at or beyond FailureAfter requests Fx shutdown once
+// first completed significant failure starts the failure window. Success or an
+// error outside the policy resets it; an ignored error is not a recovery event.
+// A subsequent significant failure at or beyond FailureAfter requests Fx shutdown once
 // per monitor with exit code 1. The monitor then returns, even if that request
 // fails. Detection is sampled rather than an exact wall-clock deadline.
 //
+// SQLSTATE errors count only when selected by WithHealthSQLStates. Pass
+// DefaultHealthSQLStates() explicitly for the recommended codes. Transport and
+// TLS failures without SQLSTATE, closed connections and check timeouts count
+// independently. Unknown errors do not count. Startup Ping is not filtered.
 // Pool saturation also counts as unavailability. This policy does not diagnose
 // connection loss or replace pgxpool's idle-connection maintenance checks.
 type HealthConfig struct {
@@ -27,9 +32,10 @@ type HealthConfig struct {
 	Interval time.Duration `env:"INTERVAL" envDescription:"Delay between pool health checks; required and positive when enabled."`
 	// Timeout bounds each check, including waiting for an available connection.
 	Timeout time.Duration `env:"TIMEOUT" envDescription:"Health check deadline including pool acquisition; positive and at most Interval."`
-	// FailureAfter is measured from the completion of the first failed check.
-	// A successful check resets it. Shutdown is requested on a failed check at
-	// or beyond this duration, so it is not an exact wall-clock deadline.
+	// FailureAfter is measured from the completion of the first significant failure.
+	// Success or an error outside the health policy resets the window. Shutdown
+	// is requested on a significant failure at or beyond this duration, so it
+	// is not an exact wall-clock deadline.
 	FailureAfter time.Duration `env:"FAILURE_AFTER" envDescription:"Continuous failure window before Fx shutdown; at least Interval."`
 }
 
@@ -42,6 +48,7 @@ func runHealthMonitor(
 	check func(context.Context) error,
 	shutdown func() error,
 	logger *slog.Logger,
+	codes ...string,
 ) {
 	timer := time.NewTimer(cfg.Interval)
 	defer timer.Stop()
@@ -67,6 +74,7 @@ func runHealthMonitor(
 			return
 		}
 
+		category, code := classifyHealthError(err, codes)
 		checkedAt := time.Now()
 
 		switch {
@@ -75,12 +83,24 @@ func runHealthMonitor(
 				logger.InfoContext(ctx, "database health restored")
 				failedAt = time.Time{}
 			}
+		case len(category) == 0:
+			failedAt = time.Time{}
 		case failedAt.IsZero():
 			failedAt = checkedAt
 			// Never log the raw error: connection errors can contain credentials.
-			logger.WarnContext(ctx, "database health check failed")
+			logger.WarnContext(
+				ctx,
+				"database health check failed",
+				"category", category,
+				"sqlstate", code,
+			)
 		case checkedAt.Sub(failedAt) >= cfg.FailureAfter:
-			logger.ErrorContext(ctx, "database health shutdown requested")
+			logger.ErrorContext(
+				ctx,
+				"database health shutdown requested",
+				"category", category,
+				"sqlstate", code,
+			)
 			if err := shutdown(); err != nil {
 				logger.ErrorContext(ctx, "database health shutdown request failed")
 			}

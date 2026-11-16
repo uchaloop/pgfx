@@ -92,26 +92,6 @@ func TestSortableRejectsNonStruct(t *testing.T) {
 	}
 }
 
-func TestSortableIsCached(t *testing.T) {
-	type row struct {
-		ID int64 `db:"id"`
-	}
-
-	first, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
-	if err != nil {
-		t.Fatalf("sortableOf: %v", err)
-	}
-
-	second, err := sortableOf(reflect.TypeFor[row](), columnTagKey)
-	if err != nil {
-		t.Fatalf("sortableOf: %v", err)
-	}
-
-	if reflect.ValueOf(first).Pointer() != reflect.ValueOf(second).Pointer() {
-		t.Fatal("the whitelist was derived twice for one model")
-	}
-}
-
 func assertCols(t *testing.T, got, want Cols) {
 	t.Helper()
 

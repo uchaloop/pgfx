@@ -4,15 +4,12 @@ package pgfx_test
 
 import (
 	"context"
-	"os"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/uchaloop/pgfx"
-	pgfxtest "github.com/uchaloop/pgfx/test"
-
 	"github.com/jackc/pgx/v5"
+	"github.com/uchaloop/pgfx"
 	"github.com/uchaloop/pgfx/page"
 )
 
@@ -25,20 +22,8 @@ type pageItem struct {
 // TestFetchPageIntegration walks a table whose sort column repeats, which is
 // where a page without a tie order starts losing and duplicating rows.
 func TestFetchPageIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatalf("MakeDB: %v", err)
-	}
-
-	t.Cleanup(db.Close)
+	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
+	t.Cleanup(cleanup)
 
 	const table = "pgfx_integration_pages"
 
@@ -154,19 +139,8 @@ func TestFetchPageIntegration(t *testing.T) {
 }
 
 func TestPageCountIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
+	defer cleanup()
 
 	type item struct {
 		ID int64 `db:"id"`
@@ -229,7 +203,7 @@ func TestPageCountIntegration(t *testing.T) {
 	}
 
 	query := page.MakeQueryOrPanic("SELECT id FROM generate_series(1::bigint, 10) AS items(id)", page.WithTie(page.MakeAscOrder("id")))
-	err = db.Transaction(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx *pgfx.Tx) error {
+	err := db.Transaction(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx *pgfx.Tx) error {
 		result, err := tx.FetchPage[item](ctx, query, page.Request{Page: 2, Limit: 3})
 		if err != nil {
 			return err
@@ -245,26 +219,16 @@ func TestPageCountIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := db.FetchPage[item](ctx, query, page.Request{Page: 1, Limit: 2}); err == nil {
+	if _, err := db.FetchPage[item](canceled, query, page.Request{Page: 1, Limit: 2}); err == nil {
 		t.Fatal("cancel ignored")
 	}
 }
 
 func TestPageSortIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
+	defer cleanup()
 
 	type item struct {
 		ID    int64  `db:"id"`

@@ -5,28 +5,16 @@ package pgfx_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/uchaloop/pgfx"
-	pgfxtest "github.com/uchaloop/pgfx/test"
 )
 
 func TestFetchOptionalRowPostgres(t *testing.T) {
-	if len(os.Getenv("PGFX_TEST_HOST")) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
+	defer cleanup()
 
 	type row struct {
 		ID int64 `db:"id"`
@@ -82,7 +70,7 @@ func TestFetchOptionalRowPostgres(t *testing.T) {
 
 	t.Run("pool", func(t *testing.T) { check(t, db.FetchOptionalRow[row], db.FetchRow[row]) })
 
-	err = db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
+	err := db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
 		t.Run("transaction", func(t *testing.T) { check(t, tx.FetchOptionalRow[row], tx.FetchRow[row]) })
 
 		return nil

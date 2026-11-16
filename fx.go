@@ -144,7 +144,8 @@ func makeConnection(
 		}
 	}
 
-	poolCfg, err := cfg.poolConfig(makeOptions(opts...))
+	resolvedOpts := makeOptions(opts...)
+	poolCfg, err := cfg.poolConfig(resolvedOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +200,7 @@ func makeConnection(
 							return health.requestShutdown()
 						},
 						health.logger,
+						resolvedOpts.healthSQLStates...,
 					)
 				}()
 			}

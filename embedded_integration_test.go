@@ -3,23 +3,14 @@
 package pgfx_test
 
 import (
-	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
-
-	pgfxtest "github.com/uchaloop/pgfx/test"
 
 	"github.com/uchaloop/pgfx/page"
 )
 
 func TestEmbeddedStructPaginationIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if len(host) == 0 {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
 	type Point struct {
 		X int64 `db:"x" json:"axisX"`
 	}
@@ -27,14 +18,9 @@ func TestEmbeddedStructPaginationIntegration(t *testing.T) {
 		Point `db:"point" json:"point"`
 		ID    int64 `db:"id" json:"id"`
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
-	db, err := pgfxtest.MakeDB(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
+	defer cleanup()
 
 	const sql = "SELECT * FROM (VALUES (1::bigint, 20::bigint), (2, 10)) AS items(id, x)"
 	control, err := db.FetchRows[row](ctx, sql)

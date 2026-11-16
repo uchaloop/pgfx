@@ -39,7 +39,11 @@ bypass its decorated shutdowner. Enabled checks without it fail construction
 with [ErrHealthModuleRequired]. Both the policy and adapter are optional when
 checks are disabled. [MakeDB] validates the policy but never runs a monitor.
 
-Each named connection uses its own policy. Sustained pool unavailability,
+[WithHealthSQLStates] selects the SQLSTATE errors counted by background checks.
+No codes are implicit; pass [DefaultHealthSQLStates]() for the recommended list.
+Transport errors without SQLSTATE and check timeouts count independently.
+Success or an ignored error resets the failure window. Startup Ping is not filtered.
+Each named connection uses its own policy and independent failure window. Sustained pool unavailability,
 including saturation, can stop the whole application. See [HealthConfig] for
 explicit duration requirements, recovery and sampled failure timing, and
 [HealthModule] for the shared shutdown contract.

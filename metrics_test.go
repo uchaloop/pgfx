@@ -14,6 +14,12 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
+var (
+	_ pgx.QueryTracer    = metricsTracer{}
+	_ pgx.BatchTracer    = metricsTracer{}
+	_ pgx.CopyFromTracer = metricsTracer{}
+)
+
 func TestQueryName(t *testing.T) {
 	ctx := WithQueryName(context.Background(), "orders.get_by_id")
 	if got := QueryName(ctx); got != "orders.get_by_id" {
@@ -84,15 +90,6 @@ func TestMetricsTracerIncludesSQLWhenEnabled(t *testing.T) {
 
 	if got.SQL != "select 1" {
 		t.Fatalf("SQL = %q, want select 1", got.SQL)
-	}
-}
-
-func TestMetricsTracerIgnoresEndWithoutStart(t *testing.T) {
-	calls := 0
-	tracer := metricsTracer{fn: func(QueryMetric) { calls++ }}
-	tracer.TraceQueryEnd(context.Background(), nil, pgx.TraceQueryEndData{})
-	if calls != 0 {
-		t.Fatalf("callback count = %d, want 0", calls)
 	}
 }
 
@@ -325,29 +322,13 @@ func TestMetricsTracerIgnoresEndsWithoutStart(t *testing.T) {
 	calls := 0
 	tracer := metricsTracer{fn: func(QueryMetric) { calls++ }}
 
+	tracer.TraceQueryEnd(context.Background(), nil, pgx.TraceQueryEndData{})
 	tracer.TraceBatchQuery(context.Background(), nil, pgx.TraceBatchQueryData{})
 	tracer.TraceBatchEnd(context.Background(), nil, pgx.TraceBatchEndData{})
 	tracer.TraceCopyFromEnd(context.Background(), nil, pgx.TraceCopyFromEndData{})
 
 	if calls != 0 {
 		t.Fatalf("callback count = %d, want 0", calls)
-	}
-}
-
-func TestMetricsTracerImplementsPgxTracers(t *testing.T) {
-	var tracer any = metricsTracer{}
-
-	if _, isOK := tracer.(pgx.QueryTracer); !isOK {
-		t.Error("metricsTracer is not a pgx.QueryTracer")
-	}
-	// multitracer routes by these interfaces, and so does pgx when the metrics
-	// tracer is the only one on the pool.
-	if _, isOK := tracer.(pgx.BatchTracer); !isOK {
-		t.Error("metricsTracer is not a pgx.BatchTracer")
-	}
-
-	if _, isOK := tracer.(pgx.CopyFromTracer); !isOK {
-		t.Error("metricsTracer is not a pgx.CopyFromTracer")
 	}
 }
 

@@ -1,7 +1,7 @@
 # pgfx
 
 <p align="center">
-  <img src="logo.svg" alt="pgfx - Go gopher peeking over an elephant" width="240">
+  <img src="logo.svg" alt="pgfx - Go gopher with elephant ears and a short trunk beside the pgfx wordmark" width="480">
 </p>
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/uchaloop/pgfx.svg)](https://pkg.go.dev/github.com/uchaloop/pgfx)
@@ -26,8 +26,8 @@ go get github.com/uchaloop/pgfx
 This README describes the current source tree, including changes in
 [0.10.0](CHANGELOG.md#0100---2026-11-15). The install command resolves the latest
 published version, which may have a different API. For these examples, use this
-checkout; for a published version, read the README at its tag. Migration notes
-are in the changelog.
+checkout; for a published version, read the README at its tag. See the
+[migration guide from 0.9.1 to 0.10.0](docs/migration-0.10.0.md) for API changes.
 
 ## Quick start
 
@@ -250,7 +250,7 @@ consumer of `*Connection`. This fragment assumes `cfg` above and an existing
 fx.New(
     pgfx.HealthModule,
     fx.Supply(cfg),
-    pgfx.MakeModule(),
+    pgfx.MakeModule(pgfx.WithHealthSQLStates(pgfx.DefaultHealthSQLStates()...)),
     fx.Invoke(registerService),
 ).Run()
 ```
@@ -268,8 +268,9 @@ With the Quick start database and environment, run `go run ./examples/health`.
 For the service's actual exit status, build and run the executable directly;
 `go run` reports a child's exit status through the Go command.
 
-After the connection's startup ping succeeds, failed checks can request shutdown
-with exit code 1; a successful check resets the failure window. Detection is sampled, not an exact one-minute
+After the connection's startup ping succeeds, significant failed checks can request
+shutdown with exit code 1. Success or an error outside the policy resets the
+failure window; an ignored error is not logged as recovery. Detection is sampled, not an exact one-minute
 deadline. The [HealthConfig contract](health.go) defines the intervals, per-check
 timeout (including pool acquisition) and failure-window timing.
 
@@ -277,6 +278,33 @@ A saturated pool can fail the check even while PostgreSQL is reachable. This
 policy detects inability to ping through the pool; it does not diagnose a broken
 network connection or guarantee every query can execute. Set thresholds for your
 workload. Startup connectivity failures still fail startup immediately.
+
+Choose SQLSTATE codes explicitly with `WithHealthSQLStates`. The option replaces
+that connection's list; the last option wins, and an empty list or no option
+means SQLSTATE errors do not trigger shutdown. Arguments are copied immediately
+and deduplicated. Invalid codes (anything other than five uppercase ASCII letters
+or digits) fail construction even when monitoring is disabled.
+`DefaultHealthSQLStates()` returns a fresh list of recommended connection,
+authentication and server-unavailability codes; see [the exact list](health_errors.go).
+
+Transport/TLS failures without SQLSTATE, closed connections and check timeouts
+(including waiting for a saturated pool) count independently of that list.
+A SQLSTATE inside a connection error is still subject to the selected list.
+Unknown hook errors are ignored. These rules apply only to background checks;
+any startup Ping error still fails startup, and ordinary query errors are not monitored.
+
+For different policies, pass options to each named module. This fragment assumes
+named Config providers and consumers for both connections, plus HealthModule at
+the application root:
+
+```go
+pgfx.MakeModuleFor("primary", pgfx.WithHealthSQLStates(pgfx.DefaultHealthSQLStates()...))
+pgfx.MakeModuleFor("analytics", pgfx.WithHealthSQLStates("53300", "57P03"))
+```
+
+Each monitor has its own failure window. Recovery of one connection cannot reset
+another's window; sustained significant failures of any enabled connection can
+stop the entire application. The option itself does not enable monitoring.
 
 `MakeModuleFor` uses the policy of its named config. Enable it only for connections
 whose unavailability should stop the entire application. `MakeDB` validates
@@ -291,7 +319,8 @@ the `postgres` prefix can set `POSTGRES_HEALTH_IS_ENABLED`,
 
 The monitor logs failure, recovery and shutdown transitions through an optional
 Fx-provided `*slog.Logger`, falling back to `slog.Default()`. It includes the
-connection name, but never the raw ping error or credentials. Logging callbacks
+connection name and, for significant failures, the category and SQLSTATE, but
+never the raw ping error or credentials. Logging callbacks
 must not block. The connection's stop hook cancels and joins the monitor before
 closing its pool; consumer stop hooks run first in Fx's reverse lifecycle order.
 

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestHealthConfigValidation(t *testing.T) {
@@ -87,7 +91,7 @@ func TestHealthMonitorRecoveryAndShutdown(t *testing.T) {
 						return nil
 					}
 
-					return errors.New("password=secret-value")
+					return fmt.Errorf("password=secret-value: %w", io.EOF)
 				},
 				func() error {
 					shutdowns.Add(1)
@@ -219,6 +223,41 @@ func TestHealthMonitorTimeoutAndShutdownError(t *testing.T) {
 
 		if !strings.Contains(logs.String(), "database health shutdown request failed") || strings.Contains(logs.String(), "sensitive") {
 			t.Fatalf("unsafe diagnostic: %s", &logs)
+		}
+	})
+}
+
+func TestHealthMonitorIgnoredErrorResetsWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := HealthConfig{IsEnabled: true, Interval: time.Second, Timeout: time.Second, FailureAfter: 2 * time.Second}
+		var logs bytes.Buffer
+		calls := 0
+		runHealthMonitor(
+			context.Background(),
+			cfg,
+			func(context.Context) error {
+				calls++
+				if calls == 3 {
+					return &pgconn.PgError{Code: "53300", Message: "secret"}
+				}
+
+				return &pgconn.PgError{Code: "57P03", Message: "secret"}
+			},
+			func() error {
+				if calls != 6 {
+					t.Fatalf("shutdown at check %d", calls)
+				}
+
+				return nil
+			},
+			slog.New(slog.NewTextHandler(&logs, nil)),
+			"57P03",
+		)
+		if strings.Contains(logs.String(), "restored") || strings.Contains(logs.String(), "secret") {
+			t.Fatal("incorrect or unsafe diagnostic")
+		}
+		if !strings.Contains(logs.String(), "sqlstate=57P03") {
+			t.Fatal("missing SQLSTATE")
 		}
 	})
 }

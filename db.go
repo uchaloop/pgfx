@@ -136,21 +136,9 @@ func (d *DB) Transaction(
 // a successful commit. Any error returns the zero value of T and the transaction
 // error unchanged. Callback, rollback and panic semantics match Transaction.
 func (d *DB) TransactionValue[T any](ctx context.Context, opts pgx.TxOptions, fn func(*Tx) (T, error)) (T, error) {
-	var value T
-
-	err := d.Transaction(ctx, opts, func(tx *Tx) error {
-		var err error
-		value, err = fn(tx)
-
-		return err
-	})
-	if err != nil {
-		var zero T
-
-		return zero, err
-	}
-
-	return value, nil
+	return transactionValue(func(callback func(*Tx) error) error {
+		return d.Transaction(ctx, opts, callback)
+	}, fn)
 }
 
 // FetchOptionalRow decodes at most one struct row, using the same mapping as
