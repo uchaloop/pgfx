@@ -9,9 +9,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOWORK: 'off'
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -21,7 +33,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d pgfx_test"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pgfx_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -43,11 +55,24 @@ jobs:
             exit 1
           fi
 
+      - name: Check module files
+        run: go mod tidy -diff
+
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags=integration ./...
+
+      - name: Install Staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+
+      - name: Staticcheck
+        run: |
+          staticcheck ./...
+          staticcheck -tags=integration ./...
 
       - name: Test
-        run: go test -race ./...
+        run: go test -count=1 -race -timeout=5m ./...
 
       - name: Integration test
         env:
@@ -55,4 +80,66 @@ jobs:
           PGFX_TEST_DATABASE: pgfx_test
           PGFX_TEST_USER: postgres
           PGFX_TEST_PASSWORD: postgres
-        run: go test -race -tags=integration ./...
+        run: go test -count=1 -race -timeout=5m -tags=integration ./...
+
+  health-restart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PGFX_TEST_HOST: 127.0.0.1:55432
+      PGFX_TEST_DATABASE: pgfx_test
+      PGFX_TEST_USER: postgres
+      PGFX_TEST_PASSWORD: postgres
+      PGFX_HEALTH_PG_CTL: /usr/lib/postgresql/17/bin/pg_ctl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install PostgreSQL 17
+        timeout-minutes: 5
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --show-error --silent --location --retry 3 --max-time 60 \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgfx-pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17
+
+      - name: Configure cluster path
+        run: echo "PGFX_HEALTH_PG_DATA=$RUNNER_TEMP/pgfx-health" >> "$GITHUB_ENV"
+
+      - name: Start disposable cluster
+        run: |
+          /usr/lib/postgresql/17/bin/initdb -D "$PGFX_HEALTH_PG_DATA" -U postgres -A trust
+          cat >> "$PGFX_HEALTH_PG_DATA/postgresql.conf" <<'CONFIG'
+          listen_addresses = '127.0.0.1'
+          port = 55432
+          unix_socket_directories = ''
+          CONFIG
+          "$PGFX_HEALTH_PG_CTL" -D "$PGFX_HEALTH_PG_DATA" -l "$PGFX_HEALTH_PG_DATA/startup.log" -w start
+          /usr/lib/postgresql/17/bin/createdb -h 127.0.0.1 -p 55432 -U postgres pgfx_test
+
+      - name: Test restart and recovery
+        run: |
+          go test -count=1 -race -tags=integration -timeout=5m -run '^TestHealthPostgresRestart$' -json . | tee "$RUNNER_TEMP/health-results.jsonl"
+          jq -se 'any(.[]; .Action == "pass" and .Test == "TestHealthPostgresRestart")' "$RUNNER_TEMP/health-results.jsonl"
+
+      - name: Stop disposable cluster
+        if: always()
+        run: |
+          if [ -f "$PGFX_HEALTH_PG_DATA/postmaster.pid" ]; then
+            "$PGFX_HEALTH_PG_CTL" -D "$PGFX_HEALTH_PG_DATA" -w -m fast stop
+          fi
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: health-restart-diagnostics
+          path: |
+            ${{ runner.temp }}/health-results.jsonl
+            ${{ runner.temp }}/pgfx-health/*.log
+          retention-days: 7

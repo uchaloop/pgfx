@@ -1,0 +1,71 @@
+name: Pagination lab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: 'off'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pagination-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Populate lab
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "$POSTGRES_CONTAINER" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres < scripts/pagination-lab.sql
+          mkdir -p "$RUNNER_TEMP/page-plans"
+          docker exec "$POSTGRES_CONTAINER" postgres --version > "$RUNNER_TEMP/page-plans/environment.txt"
+          uname -a >> "$RUNNER_TEMP/page-plans/environment.txt"
+          lscpu >> "$RUNNER_TEMP/page-plans/environment.txt"
+
+      - name: Test page plans
+        env:
+          PGFX_PAGE_TEST_HOST: localhost:5432
+          PGFX_PAGE_BENCH: '1'
+          PGFX_PAGE_PLAN_DIR: ${{ runner.temp }}/page-plans
+        run: |
+          go test -count=1 -tags=integration -timeout=5m -run '^TestPagePlans$' -json . | tee "$PGFX_PAGE_PLAN_DIR/results.jsonl"
+          jq -se 'any(.[]; .Action == "pass" and .Test == "TestPagePlans") and ([.[] | select(.Action == "pass" and (.Test // "" | test("^TestPagePlans/[^/]+/[^/]+$"))) | .Test] | sort == ["TestPagePlans/parallel/deep", "TestPagePlans/parallel/empty", "TestPagePlans/parallel/first", "TestPagePlans/sequential/deep", "TestPagePlans/sequential/empty", "TestPagePlans/sequential/first"])' "$PGFX_PAGE_PLAN_DIR/results.jsonl"
+          for mode in sequential parallel; do
+            for name in first deep empty; do
+              for statement in rows count; do
+                test -s "$PGFX_PAGE_PLAN_DIR/page-$mode-$name-$statement.json"
+              done
+            done
+          done
+
+      - name: Upload plans and results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pagination-lab
+          path: ${{ runner.temp }}/page-plans/
+          if-no-files-found: error
+          retention-days: 7

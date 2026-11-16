@@ -7,6 +7,39 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-15
+
+This release contains breaking API changes.
+
+### Added
+
+- `FetchOptionalRow` and `TransactionValue` on `DB` and `Tx`.
+- PostgreSQL error classification, constraint matching and `EscapeLike`.
+- `pgfx/test` connections with configurable pool size; tests own cleanup and isolation.
+- Runtime options on Fx modules, including type registration and pool lifecycle hooks.
+- Optional Fx health monitoring with per-connection SQLSTATE policies and shutdown
+  after sustained failures. Requires `HealthModule`; standalone `MakeDB` does not monitor.
+
+### Changed
+
+- Pagination uses `page.Fetch[T]` with list and count callbacks, returning
+  `page.Result[T]` (`List []T`, `Total int64`).
+  The default calls list then count, including for empty lists. Callback errors
+  return a zero result; successful nil lists become non-nil empty slices.
+- `page.WithParallel()` explicitly runs callbacks concurrently, cancels the
+  sibling on the first recorded error and waits for both callbacks. Use their
+  supplied contexts; do not share one transaction or connection in parallel.
+- Fx modules provide a lifecycle-owned `*Connection`; callers must not close its DB.
+- Database constructors use `Make` and runtime options use `With`.
+
+### Removed
+
+- The page SQL constructor API, request, sort and statement types and helpers.
+  Applications now own SQL, request validation, sort whitelists and matching
+  list/count filters. A shared snapshot requires sequential callbacks within
+  an explicit REPEATABLE READ transaction.
+- Cursor pagination, lookahead results and separate pagination/count helpers.
+
 ## [0.9.1] - 2026-10-01
 
 - Removed `Config.ConfigName`; applications now register an explicit instance name.
@@ -174,7 +207,7 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `Module` is now a package-level `fx.Option` variable, not a `Module()`
-  function: wire it as `pgfx.Module`, not `pgfx.Module()`. `ModuleFor(name)` is
+  function: wire it as `pgfx.Module`, not `pgfx.MakeModule()`. `ModuleFor(name)` is
   unchanged. Breaking change for callers of the default module.
 
 ## [0.1.0] - 2026-08-04
@@ -211,6 +244,8 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/uchaloop/pgfx/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/uchaloop/pgfx/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/uchaloop/pgfx/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/uchaloop/pgfx/compare/v0.8.0...v0.8.1

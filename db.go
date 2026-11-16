@@ -5,11 +5,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/uchaloop/pgfx/page"
 )
 
 // DB is a Postgres connection: a pool, and the queries bound to it. It is what
-// Make returns and what the Fx modules provide, so a repository depends on a DB
+// MakeDB returns and Connection.DB lends, so a repository depends on a DB
 // rather than on a pool plus a set of free functions.
 //
 // A DB is safe for concurrent use, as the pool behind it is. Its zero value is
@@ -22,7 +21,13 @@ type DB struct {
 // struct fields by the `db:"..."` tag, falling back to the field name. For a
 // single-column result use FetchValues.
 func (d *DB) FetchRows[T any](ctx context.Context, sql string, args ...any) ([]T, error) {
-	return collectMany(ctx, d.Pool, pgx.RowToStructByNameLax[T], sql, args...)
+	return collectMany(
+		ctx,
+		d.Pool,
+		pgx.RowToStructByNameLax[T],
+		sql,
+		args...,
+	)
 }
 
 // FetchRowsInto appends struct rows to dst. Pass dst[:0] to reuse its buffer.
@@ -30,7 +35,14 @@ func (d *DB) FetchRows[T any](ctx context.Context, sql string, args ...any) ([]T
 // On error it returns nil; appended values may already have modified dst's
 // backing array. Do not reuse that array while another consumer is reading it.
 func (d *DB) FetchRowsInto[T any](ctx context.Context, dst []T, sql string, args ...any) ([]T, error) {
-	return collectInto(ctx, d.Pool, dst, pgx.RowToStructByNameLax[T], sql, args...)
+	return collectInto(
+		ctx,
+		d.Pool,
+		dst,
+		pgx.RowToStructByNameLax[T],
+		sql,
+		args...,
+	)
 }
 
 // FetchValuesInto appends single-column values to dst. Pass dst[:0] to reuse its buffer.
@@ -38,65 +50,52 @@ func (d *DB) FetchRowsInto[T any](ctx context.Context, dst []T, sql string, args
 // On error it returns nil; appended values may already have modified dst's
 // backing array. Do not reuse that array while another consumer is reading it.
 func (d *DB) FetchValuesInto[T any](ctx context.Context, dst []T, sql string, args ...any) ([]T, error) {
-	return collectInto(ctx, d.Pool, dst, pgx.RowTo[T], sql, args...)
+	return collectInto(
+		ctx,
+		d.Pool,
+		dst,
+		pgx.RowTo[T],
+		sql,
+		args...,
+	)
 }
 
 // FetchRow runs the query and decodes exactly one struct row into T. It reports
 // pgx.ErrNoRows when the query yields no rows and pgx.ErrTooManyRows when it
 // yields more than one. For a scalar result use FetchValue.
 func (d *DB) FetchRow[T any](ctx context.Context, sql string, args ...any) (T, error) {
-	return collectOne(ctx, d.Pool, pgx.RowToStructByNameLax[T], sql, args...)
+	return collectOne(
+		ctx,
+		d.Pool,
+		pgx.RowToStructByNameLax[T],
+		sql,
+		args...,
+	)
 }
 
 // FetchValues runs the query and decodes a single-column result into a slice of
 // scalar T (int64, string, uuid.UUID, ...). For struct rows use FetchRows.
 func (d *DB) FetchValues[T any](ctx context.Context, sql string, args ...any) ([]T, error) {
-	return collectMany(ctx, d.Pool, pgx.RowTo[T], sql, args...)
+	return collectMany(
+		ctx,
+		d.Pool,
+		pgx.RowTo[T],
+		sql,
+		args...,
+	)
 }
 
 // FetchValue runs the query and decodes exactly one single-column row into a
 // scalar T. It reports pgx.ErrNoRows when the query yields no rows and
 // pgx.ErrTooManyRows when it yields more than one. For a struct use FetchRow.
 func (d *DB) FetchValue[T any](ctx context.Context, sql string, args ...any) (T, error) {
-	return collectOne(ctx, d.Pool, pgx.RowTo[T], sql, args...)
-}
-
-// FetchPage runs a paginated query and decodes one page of struct rows into T,
-// with the number of rows the filter matches in total. The page request carries
-// the page number, its size and the client's sort; the rest of the arguments are
-// the query's own, numbered from $1.
-//
-// LIMIT/OFFSET is applied around the base SELECT. Columns decode by
-// the `db:"..."` tag as everywhere else. The total takes a second statement,
-// which is skipped when a nonempty page has no row after it. An empty page is a
-// valid result, not an error.
-func (d *DB) FetchPage[T any](
-	ctx context.Context,
-	query page.Query,
-	req page.Request,
-	args ...any,
-) ([]T, uint, error) {
-	return collectPage[T](ctx, d.Pool, query, req, args)
-}
-
-// FetchPageRows runs a paginated query without counting: it returns one page of
-// struct rows and reports whether another page follows, which it learns by
-// reading one row past the page.
-func (d *DB) FetchPageRows[T any](ctx context.Context, query page.Query, req page.Request, args ...any) ([]T, bool, error) {
-	return fetchPageRows[T](ctx, d.Pool, query, req, args)
-}
-
-// FetchTotal counts the complete base filter, honoring page.CountSQL.
-// It does not apply pagination or cursor bounds and creates no transaction.
-func (d *DB) FetchTotal(ctx context.Context, query page.Query, args ...any) (uint, error) {
-	return collectTotal(ctx, d.Pool, query, args)
-}
-
-// FetchAfter returns the next keyset page without counting the full result.
-// Query sorting must include a unique Tie. The cursor is bound to the query,
-// filter arguments and effective order. No transaction is created automatically.
-func (d *DB) FetchAfter[T any](ctx context.Context, query page.Query, req page.CursorRequest, args ...any) (page.CursorResult[T], error) {
-	return collectAfter[T](ctx, d.Pool, query, req, args)
+	return collectOne(
+		ctx,
+		d.Pool,
+		pgx.RowTo[T],
+		sql,
+		args...,
+	)
 }
 
 // Transaction runs fn in a transaction. A nil error commits; a non-nil error
@@ -108,7 +107,36 @@ func (d *DB) Transaction(
 	opts pgx.TxOptions,
 	fn func(*Tx) error,
 ) error {
-	return pgx.BeginTxFunc(ctx, d.Pool, opts, func(tx pgx.Tx) error {
-		return fn(wrapTx(tx))
-	})
+	return pgx.BeginTxFunc(
+		ctx,
+		d.Pool,
+		opts,
+		func(tx pgx.Tx) error {
+			return fn(makeTx(tx))
+		},
+	)
+}
+
+// TransactionValue runs fn in a transaction and returns its value only after
+// a successful commit. Any error returns the zero value of T and the transaction
+// error unchanged. Callback, rollback and panic semantics match Transaction.
+func (d *DB) TransactionValue[T any](ctx context.Context, opts pgx.TxOptions, fn func(*Tx) (T, error)) (T, error) {
+	return transactionValue(func(callback func(*Tx) error) error {
+		return d.Transaction(ctx, opts, callback)
+	}, fn)
+}
+
+// FetchOptionalRow decodes at most one struct row, using the same mapping as
+// FetchRow. An empty result returns the zero value of T, false and nil.
+// Exactly one decoded row returns its value, true and nil. Multiple rows return
+// pgx.ErrTooManyRows. Query, decoding and iteration errors are returned unchanged
+// with a zero value and false, including errors that match pgx.ErrNoRows.
+// FetchRow retains its strict exactly-one-row contract.
+func (d *DB) FetchOptionalRow[T any](ctx context.Context, sql string, args ...any) (T, bool, error) {
+	return collectOptionalRow[T](
+		ctx,
+		d.Pool,
+		sql,
+		args...,
+	)
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,19 +16,14 @@ import (
 )
 
 func TestPostgresIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if host == "" {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	cfg := integrationConfig(host, 5*time.Second)
+	cfg := makeIntegrationConfig(t, 5*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	db, err := Make(ctx, cfg)
+	db, err := MakeDB(ctx, cfg)
 	if err != nil {
-		t.Fatalf("Make: %v", err)
+		t.Fatalf("MakeDB: %v", err)
 	}
 
 	pool := db.Pool
@@ -41,17 +37,21 @@ func TestPostgresIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchValue: %v", err)
 	}
+
 	if one != 1 {
 		t.Fatalf("FetchValue = %d, want 1", one)
 	}
 
 	const table = "pgfx_integration_items"
+
 	if _, err := pool.Exec(ctx, "drop table if exists "+table); err != nil {
 		t.Fatalf("drop stale table: %v", err)
 	}
+
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
+
 		_, _ = pool.Exec(cleanupCtx, "drop table if exists "+table)
 	})
 	if _, err := pool.Exec(
@@ -71,6 +71,7 @@ func TestPostgresIntegration(t *testing.T) {
 		if err != nil {
 			return err
 		}
+
 		if count != 1 {
 			return errors.New("insert is not visible inside transaction")
 		}
@@ -79,58 +80,123 @@ func TestPostgresIntegration(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("committed Tx: %v", err)
 	}
-	requireIntegrationCount(t, ctx, db, table, 1)
 
-	wantRollback := errors.New("rollback requested")
+	requireIntegrationCount(
+		t,
+		ctx,
+		db,
+		table,
+		1,
+	)
+
+	errRollback := errors.New("rollback requested")
 	err = db.Transaction(ctx, pgx.TxOptions{}, func(tx *Tx) error {
 		if _, execErr := tx.Exec(ctx, "insert into "+table+" (id) values (2)"); execErr != nil {
 			return execErr
 		}
 
-		return wantRollback
+		return errRollback
 	})
-	if !errors.Is(err, wantRollback) {
-		t.Fatalf("rolled-back Tx error = %v, want %v", err, wantRollback)
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back Tx error = %v, want %v", err, errRollback)
 	}
-	requireIntegrationCount(t, ctx, db, table, 1)
+
+	requireIntegrationCount(
+		t,
+		ctx,
+		db,
+		table,
+		1,
+	)
 }
 
 func TestFxLifecycleIntegration(t *testing.T) {
-	host := os.Getenv("PGFX_TEST_HOST")
-	if host == "" {
-		t.Skip("PGFX_TEST_HOST is not set")
-	}
-
-	var pool *DB
+	var connection *Connection
 	app := fx.New(
 		fx.NopLogger,
-		fx.Supply(integrationConfig(host, 5*time.Second)),
-		Module,
-		fx.Invoke(func(got *DB) { pool = got }),
+		fx.Supply(makeIntegrationConfig(t, 5*time.Second)),
+		MakeModule(),
+		fx.Invoke(func(lc fx.Lifecycle, got *Connection) {
+			connection = got
+			lc.Append(fx.Hook{
+				OnStart: func(ctx context.Context) error {
+					db, err := got.DB()
+					if err != nil {
+						return err
+					}
+
+					return db.Ping(ctx)
+				},
+			})
+		}),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("build Fx app: %v", err)
 	}
+
 	t.Cleanup(func() {
-		if pool != nil {
-			pool.Close()
+		if connection != nil {
+			connection.close()
 		}
 	})
 
+	done := make(chan struct{})
+	var readers sync.WaitGroup
+
+	for range 4 {
+		readers.Go(func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					db, err := connection.DB()
+					if err == nil {
+						if db == nil || db.Pool == nil {
+							t.Error("published uninitialized database")
+
+							return
+						}
+
+						_ = db.Config()
+					} else if !errors.Is(err, ErrConnectionNotReady) && !errors.Is(err, ErrConnectionClosed) {
+						t.Errorf("unexpected readiness error: %v", err)
+
+						return
+					}
+				}
+			}
+		})
+	}
+	defer func() { close(done); readers.Wait() }()
+
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer startCancel()
+
 	if err := app.Start(startCtx); err != nil {
 		t.Fatalf("start Fx app: %v", err)
 	}
+
+	pool, err := connection.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if err := pool.Ping(startCtx); err != nil {
 		t.Fatalf("ping after start: %v", err)
 	}
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stopCancel()
+
 	if err := app.Stop(stopCtx); err != nil {
 		t.Fatalf("stop Fx app: %v", err)
 	}
+
+	if _, err := connection.DB(); !errors.Is(err, ErrConnectionClosed) {
+		t.Fatalf("after stop: %v", err)
+	}
+
 	if err := pool.Ping(context.Background()); err == nil {
 		t.Fatal("ping after stop succeeded; pool was not closed")
 	}
@@ -144,26 +210,32 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 		Timeouts: TimeoutConfig{Connect: 200 * time.Millisecond},
 	}
 
-	var pool *DB
+	var connection *Connection
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
-		Module,
-		fx.Invoke(func(got *DB) { pool = got }),
+		MakeModule(),
+		fx.Invoke(func(got *Connection) { connection = got }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("build Fx app: %v", err)
 	}
+
 	t.Cleanup(func() {
-		if pool != nil {
-			pool.Close()
+		if connection != nil {
+			connection.close()
 		}
 	})
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer startCancel()
+
 	if err := app.Start(startCtx); err == nil {
 		t.Fatal("Fx app started with an unreachable PostgreSQL endpoint")
+	}
+
+	if db, err := connection.DB(); db != nil || !errors.Is(err, ErrConnectionNotReady) {
+		t.Fatalf("failed startup: %v, %v", db, err)
 	}
 }
 
@@ -180,12 +252,20 @@ func requireIntegrationCount(
 	if err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
+
 	if got != want {
 		t.Fatalf("row count = %d, want %d", got, want)
 	}
 }
 
-func integrationConfig(host string, connect time.Duration) Config {
+func makeIntegrationConfig(t *testing.T, connect time.Duration) Config {
+	t.Helper()
+
+	host := os.Getenv("PGFX_TEST_HOST")
+	if len(host) == 0 {
+		t.Skip("PGFX_TEST_HOST is not set")
+	}
+
 	return Config{
 		Host:     host,
 		Database: testEnv("PGFX_TEST_DATABASE", "pgfx_test"),
@@ -197,7 +277,7 @@ func integrationConfig(host string, connect time.Duration) Config {
 }
 
 func testEnv(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
+	if value := os.Getenv(name); len(value) != 0 {
 		return value
 	}
 

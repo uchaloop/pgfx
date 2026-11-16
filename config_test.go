@@ -2,6 +2,8 @@ package pgfx
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,7 +12,7 @@ import (
 	"github.com/uchaloop/secret/v2"
 )
 
-func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
+func TestConfigEveryFieldSupportsEnvironmentInput(t *testing.T) {
 	secretType := reflect.TypeOf(secret.Secret{})
 
 	var walk func(reflect.Type, string)
@@ -26,9 +28,11 @@ func TestConfigEveryFieldSupportsEnvironmentLoading(t *testing.T) {
 				if len(field.Tag.Get("envPrefix")) == 0 {
 					t.Errorf("%s has no envPrefix tag", fieldPath)
 				}
+
 				walk(field.Type, fieldPath)
 				continue
 			}
+
 			if len(field.Tag.Get("env")) == 0 {
 				t.Errorf("%s has no env tag", fieldPath)
 			}
@@ -42,37 +46,70 @@ func TestResolveEndpoint(t *testing.T) {
 	const dp uint16 = 5432
 
 	tests := []struct {
-		name     string
-		endpoint string
-		wantHost string
-		wantPort uint16
-		wantErr  bool
+		name            string
+		endpoint        string
+		wantHost        string
+		wantPort        uint16
+		isErrorExpected bool
 	}{
-		{name: "host only", endpoint: "db", wantHost: "db", wantPort: dp},
-		{name: "host:port", endpoint: "db:6543", wantHost: "db", wantPort: 6543},
-		{name: "ipv4 with port", endpoint: "192.168.1.1:6000", wantHost: "192.168.1.1", wantPort: 6000},
-		{name: "bare ipv6", endpoint: "::1", wantHost: "::1", wantPort: dp},
-		{name: "bracketed ipv6 with port", endpoint: "[::1]:6543", wantHost: "::1", wantPort: 6543},
-		{name: "empty errors", endpoint: "", wantErr: true},
-		{name: "bad port errors", endpoint: "db:x", wantErr: true},
-		{name: "missing host errors", endpoint: ":5432", wantErr: true},
+		{
+			name:     "host only",
+			endpoint: "db",
+			wantHost: "db",
+			wantPort: dp,
+		},
+		{
+			name:     "host:port",
+			endpoint: "db:6543",
+			wantHost: "db",
+			wantPort: 6543,
+		},
+		{
+			name:     "ipv4 with port",
+			endpoint: "192.168.1.1:6000",
+			wantHost: "192.168.1.1",
+			wantPort: 6000,
+		},
+		{
+			name:     "bare ipv6",
+			endpoint: "::1",
+			wantHost: "::1",
+			wantPort: dp,
+		},
+		{
+			name:     "bracketed ipv6 with port",
+			endpoint: "[::1]:6543",
+			wantHost: "::1",
+			wantPort: 6543,
+		},
+		{name: "empty errors", endpoint: "", isErrorExpected: true},
+		{name: "bad port errors", endpoint: "db:x", isErrorExpected: true},
+		{name: "missing host errors", endpoint: ":5432", isErrorExpected: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			host, port, err := resolveEndpoint(tt.endpoint)
-			if tt.wantErr {
+			if tt.isErrorExpected {
 				if err == nil {
 					t.Fatalf("expected error, got host=%q port=%d", host, port)
 				}
 
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+
 			if host != tt.wantHost || port != tt.wantPort {
-				t.Fatalf("got host=%q port=%d, want host=%q port=%d", host, port, tt.wantHost, tt.wantPort)
+				t.Fatalf(
+					"got host=%q port=%d, want host=%q port=%d",
+					host,
+					port,
+					tt.wantHost,
+					tt.wantPort,
+				)
 			}
 		})
 	}
@@ -86,8 +123,6 @@ func TestConfigValidate(t *testing.T) {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
-	// Each case is otherwise valid but flips one invalid field, so the test
-	// isolates that invariant.
 	cases := map[string]Config{
 		"missing host":     {Database: "app"},
 		"missing database": {Host: "db"},
@@ -96,6 +131,7 @@ func TestConfigValidate(t *testing.T) {
 		"negative max":     {Host: "db", Database: "app", Pool: PoolConfig{MaxConns: -1}},
 		"negative connect": {Host: "db", Database: "app", Timeouts: TimeoutConfig{Connect: -1}},
 	}
+
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
 			if err := cfg.Validate(); err == nil {
@@ -134,13 +170,20 @@ func TestConfigRequiresItsVariables(t *testing.T) {
 	tags := map[string]string{"Host": "HOST,notEmpty", "Database": "DATABASE,notEmpty"}
 
 	configType := reflect.TypeFor[Config]()
+
 	for field, want := range tags {
-		declared, ok := configType.FieldByName(field)
-		if !ok {
+		declared, isOK := configType.FieldByName(field)
+		if !isOK {
 			t.Fatalf("no field %s", field)
 		}
+
 		if got := declared.Tag.Get("env"); got != want {
-			t.Errorf("%s env tag = %q, want %q", field, got, want)
+			t.Errorf(
+				"%s env tag = %q, want %q",
+				field,
+				got,
+				want,
+			)
 		}
 	}
 }
@@ -164,12 +207,15 @@ func TestPoolConfigSetsConnectionAndKeepsPasswordOutOfDSN(t *testing.T) {
 	if poolCfg.ConnConfig.Host != "db" || poolCfg.ConnConfig.Port != 6543 {
 		t.Errorf("host/port = %q/%d, want db/6543", poolCfg.ConnConfig.Host, poolCfg.ConnConfig.Port)
 	}
+
 	if poolCfg.ConnConfig.Database != "app" || poolCfg.ConnConfig.User != "orders" {
 		t.Errorf("database/user = %q/%q", poolCfg.ConnConfig.Database, poolCfg.ConnConfig.User)
 	}
+
 	if poolCfg.ConnConfig.Password != "s3cr3t" {
 		t.Errorf("password not set on ConnConfig: %q", poolCfg.ConnConfig.Password)
 	}
+
 	if poolCfg.MaxConns != 20 {
 		t.Errorf("max_conns = %d, want 20", poolCfg.MaxConns)
 	}
@@ -191,6 +237,7 @@ func TestPoolConfigKeepsLibpqDefaultsWhenUserPasswordEmpty(t *testing.T) {
 	if poolCfg.ConnConfig.User != "pguser" {
 		t.Errorf("user = %q, want pguser (libpq default kept)", poolCfg.ConnConfig.User)
 	}
+
 	if poolCfg.ConnConfig.Password != "pgpass" {
 		t.Error("password from PGPASSWORD was overwritten")
 	}
@@ -221,12 +268,15 @@ func TestPoolConfigAppliesEveryPoolLimit(t *testing.T) {
 	if poolCfg.MaxConns != want.MaxConns {
 		t.Errorf("MaxConns = %d, want %d", poolCfg.MaxConns, want.MaxConns)
 	}
+
 	if poolCfg.MinConns != want.MinConns {
 		t.Errorf("MinConns = %d, want %d", poolCfg.MinConns, want.MinConns)
 	}
+
 	if poolCfg.MinIdleConns != want.MinIdleConns {
 		t.Errorf("MinIdleConns = %d, want %d", poolCfg.MinIdleConns, want.MinIdleConns)
 	}
+
 	if poolCfg.MaxConnLifetime != want.MaxConnLifetime {
 		t.Errorf(
 			"MaxConnLifetime = %v, want %v",
@@ -234,6 +284,7 @@ func TestPoolConfigAppliesEveryPoolLimit(t *testing.T) {
 			want.MaxConnLifetime,
 		)
 	}
+
 	if poolCfg.MaxConnLifetimeJitter != want.MaxConnLifetimeJitter {
 		t.Errorf(
 			"MaxConnLifetimeJitter = %v, want %v",
@@ -241,6 +292,7 @@ func TestPoolConfigAppliesEveryPoolLimit(t *testing.T) {
 			want.MaxConnLifetimeJitter,
 		)
 	}
+
 	if poolCfg.MaxConnIdleTime != want.MaxConnIdleTime {
 		t.Errorf(
 			"MaxConnIdleTime = %v, want %v",
@@ -248,6 +300,7 @@ func TestPoolConfigAppliesEveryPoolLimit(t *testing.T) {
 			want.MaxConnIdleTime,
 		)
 	}
+
 	if poolCfg.HealthCheckPeriod != want.HealthPeriod {
 		t.Errorf(
 			"HealthCheckPeriod = %v, want %v",
@@ -272,18 +325,21 @@ func TestPoolConfigZeroPoolLimitsKeepPgxDefaults(t *testing.T) {
 	if poolCfg.MaxConns <= 0 {
 		t.Fatalf("MaxConns = %d, want a positive pgxpool default", poolCfg.MaxConns)
 	}
+
 	if poolCfg.MaxConnLifetime <= 0 {
 		t.Fatalf(
 			"MaxConnLifetime = %v, want a positive pgxpool default",
 			poolCfg.MaxConnLifetime,
 		)
 	}
+
 	if poolCfg.MaxConnIdleTime <= 0 {
 		t.Fatalf(
 			"MaxConnIdleTime = %v, want a positive pgxpool default",
 			poolCfg.MaxConnIdleTime,
 		)
 	}
+
 	if poolCfg.HealthCheckPeriod <= 0 {
 		t.Fatalf(
 			"HealthCheckPeriod = %v, want a positive pgxpool default",
@@ -296,5 +352,86 @@ func TestConfigMasksPassword(t *testing.T) {
 	cfg := Config{Password: secret.New("hunter2")}
 	if out := fmt.Sprintf("%+v", cfg); strings.Contains(out, "hunter2") {
 		t.Fatalf("Config %%+v leaks the password: %s", out)
+	}
+}
+
+func TestPassfileUsesEffectiveIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		user        string
+		database    string
+		password    string
+		envPassword string
+		want        string
+	}{
+		{
+			name:     "explicit identity",
+			user:     "app_role",
+			database: "app",
+			want:     "app-password",
+		},
+		{name: "default user", database: "app", want: "default-user-password"},
+		{
+			name:     "quoted identity",
+			user:     "app 'role",
+			database: "app 'db",
+			want:     "quoted-password",
+		},
+		{
+			name:        "environment password",
+			user:        "app_role",
+			database:    "app",
+			envPassword: "env-password",
+			want:        "env-password",
+		},
+		{
+			name:        "explicit password",
+			user:        "app_role",
+			database:    "app",
+			password:    "explicit-password",
+			envPassword: "env-password",
+			want:        "explicit-password",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PGUSER", "default_role")
+			t.Setenv("PGDATABASE", "default_db")
+			t.Setenv("PGPASSWORD", tc.envPassword)
+			t.Setenv("PGSERVICE", "")
+			path := filepath.Join(t.TempDir(), "pgpass")
+			data := "localhost:5432:default_db:default_role:wrong-password\nlocalhost:5432:app:app_role:app-password\nlocalhost:5432:app:default_role:default-user-password\nlocalhost:5432:app 'db:app 'role:quoted-password\n"
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			t.Setenv("PGPASSFILE", path)
+			cfg := Config{
+				Host:     "localhost",
+				Database: tc.database,
+				User:     tc.user,
+				Password: secret.New(tc.password),
+				TLS:      TLSConfig{Mode: "disable"},
+			}
+			poolCfg, err := cfg.poolConfig(makeOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if poolCfg.ConnConfig.Password != tc.want {
+				t.Error("wrong password selected for effective identity")
+			}
+
+			if poolCfg.ConnConfig.Database != tc.database {
+				t.Error("database changed during parsing")
+			}
+
+			if len(tc.user) != 0 && poolCfg.ConnConfig.User != tc.user {
+				t.Error("user changed during parsing")
+			}
+
+			if strings.Contains(poolCfg.ConnConfig.ConnString(), tc.want) {
+				t.Error("password leaked into connection string")
+			}
+		})
 	}
 }
