@@ -17,6 +17,7 @@ func TestPageExamples(t *testing.T) {
 		maxConns string
 		run      func()
 	}{
+		{name: "pager", maxConns: "1", run: ExamplePager_Fetch},
 		{name: "sequential", maxConns: "1", run: ExampleFetch},
 		{name: "parallel", maxConns: "2", run: ExampleFetch_parallel},
 		{name: "transaction", maxConns: "1", run: ExampleFetch_transaction},

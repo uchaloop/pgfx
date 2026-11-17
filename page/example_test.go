@@ -142,3 +142,50 @@ func ExampleFetch_transaction() {
 	fmt.Println(result.List, result.Total)
 	// Prints [{7} {8}] 5.
 }
+
+// ExamplePager_Fetch выполняется через TestPageExamples с тегом integration.
+func ExamplePager_Fetch() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db, err := pgfxtest.MakeDB(ctx)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	pager, err := page.MakePager(page.Config{MinLimit: 1, DefaultLimit: 2, MaxLimit: 100})
+	if err != nil {
+		panic(err)
+	}
+
+	type item struct {
+		ID int64 `db:"id"`
+	}
+	result, err := pager.Fetch(
+		ctx,
+		db,
+		page.Params{Page: 2, Limit: 2},
+		func(ctx context.Context, tx *pgfx.Tx, bounds page.Bounds) ([]item, error) {
+			return tx.FetchRows[item](
+				ctx,
+				"SELECT id FROM generate_series(1::bigint, 5) AS items(id) ORDER BY id LIMIT $1 OFFSET $2",
+				bounds.Limit,
+				bounds.Offset,
+			)
+		},
+		func(ctx context.Context, tx *pgfx.Tx) (int64, error) {
+			return tx.FetchValue[int64](ctx, "SELECT COUNT(*) FROM generate_series(1::bigint, 5)")
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// Проверяем результат при запуске через интеграционный тест.
+	if len(result.List) != 2 || result.List[0].ID != 3 || result.List[1].ID != 4 || result.Total != 5 {
+		panic("unexpected page result")
+	}
+	fmt.Println(result.List, result.Total)
+	// Prints [{3} {4}] 5.
+}
