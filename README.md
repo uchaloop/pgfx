@@ -24,7 +24,7 @@ go get github.com/uchaloop/pgfx
 ```
 
 This README describes the current source tree, including changes in
-[0.10.0](CHANGELOG.md#0100---2026-11-15). The install command resolves the latest
+[0.11.0](CHANGELOG.md#0110---2026-11-17). The install command resolves the latest
 published version, which may have a different API. For these examples, use this
 checkout; for a published version, read the README at its tag.
 The API may change between 0.x releases without backward compatibility.
@@ -412,47 +412,87 @@ requires exactly one row and returns `pgx.ErrNoRows` for an empty result.
 
 ## Pagination
 
-`page.Fetch[T]` combines a list callback and a count callback into
-`page.Result[T]`, containing `List []T` and `Total int64`. By default it calls
-list first, then count, including when the list is empty. A callback error
-returns a zero result; a successful nil list becomes a non-nil empty slice.
-The result has no JSON tags; response serialization belongs to the application.
+| API | Use when |
+| --- | --- |
+| `page.MakePager` and `Pager.Fetch` | Numbered pages need normalized limits and one database snapshot. |
+| `page.Fetch` | The caller supplies pagination and manages the callbacks' resources. |
 
-This fragment assumes `ctx`, an initialized `db`, an `Order` type with `db`
-tags, an `orders` table, and imports for `context` and `pgfx/page`. Its enclosing
-function returns `(page.Result[Order], error)`:
+Both return `page.Result[T]` with `List []T` and `Total int64`.
+Response serialization belongs to the application.
+
+### Numbered pages with a consistent snapshot
+
+`Pager.Fetch` calculates `LIMIT/OFFSET` from `page.Params{Page, Limit}` and
+runs list, then count, in one read-only `REPEATABLE READ` transaction. Both
+callbacks must use the supplied `*pgfx.Tx` and context. Rows retain `db`-tag
+mapping; JSON tags are unrelated to database decoding.
+
+`page.MakePager(page.Config{})` uses minimum/default/maximum limits of 1/10/100.
+Each zero configuration field uses its default. The constructor rejects negative
+limits and requires minimum <= default <= maximum. A page below 1 becomes 1;
+a nonpositive requested limit uses the default; a positive limit is clamped to
+the configured range. `pager.Bounds(params)` performs the same calculation
+without accessing the database and rejects offset overflow with `page.ErrParams`.
+
+The following fragment assumes `ctx`, an initialized `db`, an `orders` table,
+and an `Order` type with an `ID` field tagged `db:"id"`. Import `context`,
+`github.com/uchaloop/pgfx` and `github.com/uchaloop/pgfx/page`; the enclosing
+function returns `(page.Result[Order], error)`. Construct the pager once and
+reuse it across requests.
 
 ```go
-return page.Fetch(ctx,
-    func(ctx context.Context) ([]Order, error) {
-        return db.FetchRows[Order](ctx, "SELECT id, amount FROM orders ORDER BY id LIMIT 20")
+pager, err := page.MakePager(page.Config{MinLimit: 1, DefaultLimit: 20, MaxLimit: 100})
+if err != nil {
+    return page.Result[Order]{}, err
+}
+
+return pager.Fetch(
+    ctx,
+    db,
+    page.Params{Page: 2, Limit: 20},
+    func(ctx context.Context, tx *pgfx.Tx, bounds page.Bounds) ([]Order, error) {
+        return tx.FetchRows[Order](
+            ctx,
+            "SELECT id FROM orders ORDER BY id LIMIT $1 OFFSET $2",
+            bounds.Limit,
+            bounds.Offset,
+        )
     },
-    func(ctx context.Context) (int64, error) {
-        return db.FetchValue[int64](ctx, "SELECT count(*) FROM orders")
+    func(ctx context.Context, tx *pgfx.Tx) (int64, error) {
+        return tx.FetchValue[int64](ctx, "SELECT COUNT(*) FROM orders")
     },
 )
 ```
 
-The complete examples use `pgfx/test` and `generate_series`, so they require no
-application tables. See [PostgreSQL integration tests](CONTRIBUTING.md#postgresql-integration-tests)
-for the environment and execution command.
+Count runs
+even for an empty page; a successful empty list is non-nil. Errors from callbacks,
+context cancellation, begin or commit return a zero result. A list error skips
+count. The helper owns the transaction, but does not close the borrowed DB.
+Callbacks must not commit or roll back the transaction themselves.
 
-Pass `page.WithParallel()` as the final argument to run both callbacks
-concurrently. Both must use the supplied callback context and support concurrent
-execution. On the first recorded callback error, Fetch cancels the sibling,
-waits for both callbacks to finish and returns that error with a zero result.
-Callbacks must cooperate with cancellation; Fetch cannot force them to stop.
-Never use parallel callbacks on the same transaction or connection. A pool can
-supply separate connections, but concurrency consumes pool capacity and does not
-guarantee a faster response or a shared snapshot. Context and both callbacks
-must be non-nil.
+### Independent callbacks
 
-The application owns SQL, filter arguments, request validation, defaults, maximum
-page size and safe offset arithmetic. The page package provides no request or SQL
-constructor types. Keep list and count filters consistent; exclude pagination
-from the count and preserve DISTINCT, grouping and join result semantics.
-Use parameterized filter values and an explicit whitelist for client-controlled
-sort columns and directions; never interpolate raw client sort text.
+`page.Fetch` does not calculate bounds or open a transaction. It calls list,
+then count, including for empty lists. As with `Pager.Fetch`, callback errors
+return a zero result and a successful nil list becomes non-nil.
+
+`page.WithParallel()` runs callbacks concurrently using their supplied contexts.
+The first recorded error cancels the sibling; Fetch waits for both to finish.
+Callbacks must cooperate with cancellation. Never share a transaction or
+connection between parallel callbacks. Pool-backed callbacks use separate
+connections and do not guarantee a common snapshot or faster execution.
+The context and callbacks must be non-nil.
+
+See the [complete examples](page/example_test.go) for sequential, parallel and
+caller-owned transaction variants, plus the main `Pager.Fetch` scenario.
+They use `pgfx/test` and `generate_series`, without application tables; see
+[PostgreSQL integration tests](CONTRIBUTING.md#postgresql-integration-tests)
+for setup and execution.
+
+For either API, keep list/count filters identical and exclude LIMIT/OFFSET from
+the count. Preserve DISTINCT, grouping and join semantics. SQL and filter values
+belong to the application: parameterize values and whitelist client-controlled
+sort columns and directions. Never interpolate raw client sort text.
 
 ### Sorting and indexes
 
@@ -467,7 +507,7 @@ LIMIT/OFFSET supports direct page navigation, but deep offsets make PostgreSQL
 walk skipped rows, and an exact count processes the complete base result. The
 returned-row limit does not bound database work. See
 [pagination-lab](CONTRIBUTING.md#pagination-lab) for sequential and parallel row
-and count plan checks, [complete sequential, parallel and transaction examples](page/example_test.go).
+and count plan checks, [pagination examples](page/example_test.go).
 
 ## Transactions
 
@@ -498,11 +538,8 @@ provide typed pgx savepoints. Native `DB.Begin` and `DB.BeginTx` return `pgx.Tx`
 See the [transaction examples](example_test.go) and the
 [complete TransactionValue example](transaction_value_example_test.go).
 
-Pagination does not open transactions automatically. Concurrent writes can make
-its row and count queries observe different snapshots, including in a default
-READ COMMITTED transaction. To read the list and total from one snapshot, use
-an explicit `pgx.RepeatableRead` transaction and sequential `page.Fetch` callbacks
-that both query its `*pgfx.Tx`. Do not pass `page.WithParallel()` in that transaction.
+`Pager.Fetch` owns a read-only REPEATABLE READ transaction; `page.Fetch` does
+not create one. See [Pagination](#pagination) to choose the appropriate API.
 
 ## Errors and diagnostics
 
@@ -511,8 +548,9 @@ that both query its `*pgfx.Tx`. Do not pass `page.WithParallel()` in that transa
   sentinel errors and `errors.As` for PostgreSQL errors.
 - `Connection.DB` returns `ErrConnectionNotReady` before successful startup and
   `ErrConnectionClosed` after shutdown. A borrowed handle does not extend pool lifetime.
-- Validate pagination requests and reject unknown sort fields in application code.
-  `page.Fetch` coordinates callbacks; it does not validate or build SQL.
+- Use `errors.Is(err, page.ErrParams)` for invalid pager configuration or offset
+  overflow. Validate application filters and allowed sort fields separately;
+  neither pagination API builds SQL.
 - Pass a context with an appropriate deadline and handle the returned error.
   Avoid logging credentials, raw filter arguments or SQL containing secrets.
 

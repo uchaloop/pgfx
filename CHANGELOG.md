@@ -7,6 +7,21 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-17
+
+### Added
+
+- `page.MakePager` constructs an immutable pager with configurable minimum,
+  default and maximum limits (1, 10 and 100 by default).
+- `Pager.Bounds` normalizes page requests and detects offset overflow;
+  invalid configuration and overflowing requests return `page.ErrParams`.
+- `Pager.Fetch` runs list and count sequentially in one read-only REPEATABLE READ
+  transaction, preserving db-tag row mapping and returning results only after
+  a successful commit. Empty pages retain the total and return a non-nil list.
+- Tests cover limit normalization, shared snapshots, cancellation, callback
+  failures and commit failures with rollback.
+
+
 ## [0.10.0] - 2026-11-15
 
 This release contains breaking API changes.
@@ -244,7 +259,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/uchaloop/pgfx/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/uchaloop/pgfx/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/uchaloop/pgfx/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/uchaloop/pgfx/compare/v0.8.1...v0.9.0

@@ -1,6 +1,6 @@
 //go:build integration
 
-package pgfx
+package pgfx_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uchaloop/pgfx"
 	"github.com/uchaloop/pgfx/page"
 	"github.com/uchaloop/secret/v2"
 )
@@ -33,13 +34,13 @@ func TestPagePlans(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	db, err := MakeDB(ctx, Config{
+	db, err := pgfx.MakeDB(ctx, pgfx.Config{
 		Host:     host,
 		Database: "pagination_lab",
 		User:     "pagination_lab",
 		Password: secret.New("pagination_lab"),
-		TLS:      TLSConfig{Mode: "disable"},
-		Pool:     PoolConfig{MaxConns: 2},
+		TLS:      pgfx.TLSConfig{Mode: "disable"},
+		Pool:     pgfx.PoolConfig{MaxConns: 2},
 	})
 	if err != nil {
 		t.Fatal(err)

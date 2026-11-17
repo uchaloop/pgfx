@@ -60,10 +60,10 @@ interpret a skipped test as a verified database scenario.
 Tests using `pgfx/test` share the same connection variables and manage their own
 fixtures. For use in your application, see [Testing](README.md#testing).
 The integration suite also executes the optional-row, buffer-reuse and
-transaction-value examples through `TestDocumentationExamples`. The three
-[page.Fetch examples](page/example_test.go) run through `TestPageExamples` in
+transaction-value examples through `TestDocumentationExamples`. The four
+[pagination examples](page/example_test.go) run through `TestPageExamples` in
 the page package. They use `generate_series` and need no application tables.
-Sequential and transaction examples use one pooled connection; the parallel
+Pager.Fetch, sequential and transaction examples use one pooled connection; the parallel
 example allows two.
 
 To run only the pagination examples with the same environment:
