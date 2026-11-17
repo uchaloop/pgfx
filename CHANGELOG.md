@@ -14,7 +14,8 @@ This release contains breaking API changes.
 ### Added
 
 - `ReadWithFallback` for repeatable replica reads with one master fallback on
-  availability failures, shared context and preserved error causes. Existing
+  availability failures (including SQLSTATE 53300), shared context and preserved
+  error causes. Whole-page reads can retry list and count together. Existing
   DB, Tx and Pager APIs are unchanged.
 
 ### Changed
