@@ -88,7 +88,7 @@ func TestHealthSQLStatesValidateBeforeConnect(t *testing.T) {
 		t.Fatal("MakeDB accepted invalid SQLSTATE")
 	}
 
-	var connection *Connection
+	var connection *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),

@@ -56,7 +56,7 @@ func TestHealthModuleRequiredWhenEnabled(t *testing.T) {
 		fx.NopLogger,
 		fx.Supply(cfg),
 		MakeModule(),
-		fx.Invoke(func(*Connection) {}),
+		fx.Invoke(func(*DB) {}),
 	)
 	if !errors.Is(app.Err(), ErrHealthModuleRequired) {
 		t.Fatalf("missing health module: %v", app.Err())

@@ -62,14 +62,9 @@ func ExampleMakeModuleFor() {
 }
 
 // registerExampleQuery consumes the handle so Fx constructs the pool provider.
-func registerExampleQuery(lc fx.Lifecycle, connection *pgfx.Connection) {
+func registerExampleQuery(lc fx.Lifecycle, db *pgfx.DB) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			db, err := connection.DB()
-			if err != nil {
-				return err
-			}
-
 			value, err := db.FetchValue[int](ctx, "SELECT 1")
 			if err != nil {
 				return err
@@ -271,12 +266,10 @@ func ExampleMakeModule_types() {
 	_ = fx.New(
 		fx.Supply(pgfx.Config{Host: "localhost:5432", Database: "orders"}),
 		pgfx.MakeModule(pgfx.WithAfterConnect(registerTypes)),
-		fx.Invoke(func(lc fx.Lifecycle, connection *pgfx.Connection) {
+		fx.Invoke(func(lc fx.Lifecycle, db *pgfx.DB) {
 			lc.Append(fx.Hook{
-				OnStart: func(context.Context) error {
-					_, err := connection.DB()
-
-					return err
+				OnStart: func(ctx context.Context) error {
+					return db.Ping(ctx)
 				},
 			})
 		}),

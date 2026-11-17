@@ -55,7 +55,7 @@ func TestFxAfterConnectTypes(t *testing.T) {
 			return err
 		})
 	}
-	var primary, replica *Connection
+	var primary, replica *DB
 	opts := []Option{register("primary")}
 	primaryModule := MakeModule(opts...)
 	opts[0] = WithAfterConnect(func(context.Context, *pgx.Conn) error {
@@ -68,7 +68,7 @@ func TestFxAfterConnectTypes(t *testing.T) {
 		primaryModule,
 		MakeModuleFor("replica", register("replica")),
 		fx.Invoke(fx.Annotate(
-			func(p, r *Connection) { primary, replica = p, r },
+			func(p, r *DB) { primary, replica = p, r },
 			fx.ParamTags(``, `name:"replica"`),
 		)),
 	)
@@ -86,16 +86,13 @@ func TestFxAfterConnectTypes(t *testing.T) {
 
 	for _, item := range []struct {
 		name       string
-		connection *Connection
+		connection *DB
 	}{
 		{name: "primary", connection: primary},
 		{name: "replica", connection: replica},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			db, err := item.connection.DB()
-			if err != nil {
-				t.Fatal(err)
-			}
+			db := item.connection
 
 			for generation := range 2 {
 				t.Run(fmt.Sprintf("generation_%d", generation), func(t *testing.T) {
@@ -140,7 +137,7 @@ func TestFxAfterConnectFailure(t *testing.T) {
 	for _, name := range []string{"", "replica"} {
 		t.Run(name, func(t *testing.T) {
 			errExpected := errors.New("type registration failed")
-			var connection *Connection
+			var connection *DB
 			hook := WithAfterConnect(func(context.Context, *pgx.Conn) error { return errExpected })
 			module := MakeModule(hook)
 			supply := fx.Supply(cfg)
@@ -149,7 +146,7 @@ func TestFxAfterConnectFailure(t *testing.T) {
 				module = MakeModuleFor(name, hook)
 				supply = fx.Supply(fx.Annotate(cfg, fx.ResultTags(`name:"replica"`)))
 				invoke = fx.Invoke(fx.Annotate(
-					func(c *Connection) { connection = c },
+					func(c *DB) { connection = c },
 					fx.ParamTags(`name:"replica"`),
 				))
 			}
@@ -167,8 +164,8 @@ func TestFxAfterConnectFailure(t *testing.T) {
 				t.Fatalf("Start: %v, want hook error", err)
 			}
 
-			if _, err := connection.DB(); !errors.Is(err, ErrConnectionNotReady) {
-				t.Fatalf("published failed pool: %v", err)
+			if connection.Pool != nil {
+				t.Fatal("pool published before successful start")
 			}
 
 			if err := app.Stop(ctx); err != nil {
@@ -181,7 +178,7 @@ func TestFxAfterConnectFailure(t *testing.T) {
 func TestFxAfterConnectCancellation(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	finished := make(chan struct{}, 1)
-	var connection *Connection
+	var connection *DB
 	cfg := makeIntegrationConfig(t, 100*time.Millisecond)
 	cfg.Pool.MaxConns = 1
 	app := fx.New(
@@ -215,8 +212,8 @@ func TestFxAfterConnectCancellation(t *testing.T) {
 		t.Fatal("hook did not stop after startup cancellation")
 	}
 
-	if _, err := connection.DB(); !errors.Is(err, ErrConnectionNotReady) {
-		t.Fatalf("published failed pool: %v", err)
+	if connection.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
@@ -229,7 +226,7 @@ func TestFxAfterConnectCancellation(t *testing.T) {
 
 func TestFxOptionsOverrideInjectedDefaults(t *testing.T) {
 	var injected, explicit atomic.Int64
-	var connection *Connection
+	var connection *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeIntegrationConfig(t, time.Second)),
@@ -256,10 +253,7 @@ func TestFxOptionsOverrideInjectedDefaults(t *testing.T) {
 		}
 	}()
 
-	db, err := connection.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := connection
 
 	if _, err := db.Exec(ctx, "SELECT 1"); err != nil {
 		t.Fatal(err)

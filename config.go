@@ -28,7 +28,7 @@ const defaultPostgresPort uint16 = 5432
 // Host and Database must be supplied by the deployment. User and Password are
 // optional: when empty they fall back to libpq's defaults (PGUSER / the OS user,
 // and PGPASSWORD / .pgpass).
-// Register with the explicit instance name "postgres" to read POSTGRES_*.
+// EnvPrefix declares POSTGRES_ for loaders that support type prefixes.
 type Config struct {
 	// Host is the endpoint as "host" or "host:port". A port in the string wins;
 	// when omitted, 5432 applies. IPv6 with a port must be bracketed
@@ -60,6 +60,10 @@ type Config struct {
 	// Timeouts configures connection timeouts.
 	Timeouts TimeoutConfig `envPrefix:"TIMEOUTS_"`
 }
+
+// EnvPrefix declares the default environment prefix for compatible loaders.
+// Named instances compose their instance prefix with this prefix.
+func (Config) EnvPrefix() string { return "POSTGRES_" }
 
 // TLSConfig holds the libpq TLS settings.
 type TLSConfig struct {

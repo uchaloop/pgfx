@@ -33,14 +33,9 @@ func main() {
 	).Run()
 }
 
-func registerQuery(lc fx.Lifecycle, connection *pgfx.Connection) {
+func registerQuery(lc fx.Lifecycle, db *pgfx.DB) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			db, err := connection.DB()
-			if err != nil {
-				return err
-			}
-
 			value, err := db.FetchValue[int](ctx, "SELECT 1")
 			if err != nil {
 				return err

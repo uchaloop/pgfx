@@ -151,8 +151,8 @@ func TestFetchPageCommitFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	// Временная таблица доступна для записи в read-only транзакции.
-	// Отложенное ограничение гарантирует ошибку именно при COMMIT.
+	// A temporary table permits writes in a read-only transaction.
+	// The deferred constraint ensures the failure occurs at COMMIT.
 	if _, err := db.Exec(t.Context(), "CREATE TEMP TABLE page_commit_failure (id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"); err != nil {
 		t.Fatal(err)
 	}

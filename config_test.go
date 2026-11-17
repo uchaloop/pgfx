@@ -435,3 +435,9 @@ func TestPassfileUsesEffectiveIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigEnvPrefix(t *testing.T) {
+	if got := (Config{}).EnvPrefix(); got != "POSTGRES_" {
+		t.Fatalf("EnvPrefix() = %q, want POSTGRES_", got)
+	}
+}

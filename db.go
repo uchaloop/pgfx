@@ -7,12 +7,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DB is a Postgres connection: a pool, and the queries bound to it. It is what
-// MakeDB returns and Connection.DB lends, so a repository depends on a DB
-// rather than on a pool plus a set of free functions.
-//
-// A DB is safe for concurrent use, as the pool behind it is. Its zero value is
-// not usable.
+// DB extends a PostgreSQL pool with typed queries.
+// MakeDB returns an initialized DB owned by its caller.
+// Fx provides DB during graph construction and initializes Pool in OnStart.
+// Consumers query in their own OnStart hooks or after application startup,
+// finish work in OnStop, and must not close the lifecycle-owned pool themselves.
+// Once initialized, DB supports concurrent queries. Its zero value is not usable;
+// Pool must not be replaced while DB is in use.
 type DB struct {
 	*pgxpool.Pool
 }

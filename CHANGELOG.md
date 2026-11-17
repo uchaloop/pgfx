@@ -7,6 +7,25 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-17
+
+This release contains breaking API changes.
+
+### Changed
+
+- `Config.EnvPrefix()` declares `POSTGRES_` for compatible configuration loaders,
+  without a loader dependency. Updated confmaker/confx support an untagged
+  default and preserve `postgres` without duplicate prefixes. Named instances
+  now use `MASTER_POSTGRES_*` / `REPLICA_POSTGRES_*` with those loaders;
+  migrate ENV keys with the binary or set `WithPrefix("MASTER_")` explicitly
+  to retain legacy names and unchanged Fx tags.
+- Fx modules now provide `*DB` directly, using the same names as their Config.
+  The embedded pool is initialized and pinged in OnStart; consumers only store
+  the pointer during construction and query after startup.
+- Removed `Connection`, `Connection.DB()`, `ErrConnectionNotReady` and
+  `ErrConnectionClosed`.
+  Health monitors remain lifecycle-owned and stop before their pools close.
+
 ## [0.11.0] - 2026-11-17
 
 ### Added
@@ -259,7 +278,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/uchaloop/pgfx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/uchaloop/pgfx/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/uchaloop/pgfx/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/uchaloop/pgfx/compare/v0.9.0...v0.9.1

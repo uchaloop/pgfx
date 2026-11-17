@@ -9,36 +9,36 @@ import (
 	"github.com/uchaloop/pgfx"
 )
 
-// ErrParams означает некорректные параметры или переполнение границ страницы.
+// ErrParams reports invalid pagination parameters or offset overflow.
 var ErrParams = errors.New("invalid pagination parameters")
 
-// Params задаёт номер страницы и запрошенный размер.
+// Params specifies the page number and requested size.
 type Params struct {
 	Page  int
 	Limit int
 }
 
-// Config задаёт минимальный, стандартный и максимальный размеры страницы.
-// Нулевые значения соответствуют минимуму 1, размеру по умолчанию 10 и максимуму 100.
+// Config specifies the minimum, default and maximum page sizes.
+// Zero fields use defaults of 1, 10 and 100, respectively.
 type Config struct {
 	MinLimit     int
 	DefaultLimit int
 	MaxLimit     int
 }
 
-// Bounds содержит границы SQL LIMIT/OFFSET.
+// Bounds contains SQL LIMIT/OFFSET values.
 type Bounds struct {
 	Limit  int64
 	Offset int64
 }
 
-// Pager хранит неизменяемые настройки и допускает параллельное использование.
-// Нулевое значение не предназначено для использования; создавайте через MakePager.
+// Pager stores immutable settings and supports concurrent use.
+// Its zero value is not usable; construct it with MakePager.
 type Pager struct {
 	config Config
 }
 
-// MakePager проверяет настройки один раз и сохраняет их копию.
+// MakePager validates settings once and stores a copy.
 func MakePager(cfg Config) (*Pager, error) {
 	if cfg.MinLimit == 0 {
 		cfg.MinLimit = 1
@@ -59,7 +59,7 @@ func MakePager(cfg Config) (*Pager, error) {
 	return &Pager{config: cfg}, nil
 }
 
-// Bounds нормализует параметры и проверяет переполнение до обращения к БД.
+// Bounds normalizes parameters and checks overflow without accessing the database.
 func (p *Pager) Bounds(params Params) (Bounds, error) {
 	cfg := p.config
 	number, size := int64(params.Page), int64(params.Limit)
@@ -86,10 +86,10 @@ func (p *Pager) Bounds(params Params) (Bounds, error) {
 	return Bounds{Limit: size, Offset: (number - 1) * size}, nil
 }
 
-// Fetch читает список и количество в одном снимке PostgreSQL.
-// Callback должны использовать переданный tx и ctx; сначала выполняется list, затем count.
-// Библиотека завершает транзакцию; ошибка возвращает нулевой Result, успешный пустой список не nil.
-// db заимствован и не закрывается. ctx должен быть ненулевым.
+// Fetch reads the list and count from one PostgreSQL snapshot.
+// Callbacks must use the supplied tx and ctx; list runs before count.
+// Fetch owns transaction completion. Errors return a zero Result; a successful empty list is non-nil.
+// The borrowed db is not closed. ctx must be non-nil.
 func (p *Pager) Fetch[T any](ctx context.Context, db *pgfx.DB, params Params, list func(context.Context, *pgfx.Tx, Bounds) ([]T, error), count func(context.Context, *pgfx.Tx) (int64, error)) (Result[T], error) {
 	bounds, err := p.Bounds(params)
 	if err != nil {
