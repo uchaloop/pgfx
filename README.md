@@ -525,6 +525,60 @@ returned-row limit does not bound database work. See
 [pagination-lab](CONTRIBUTING.md#pagination-lab) for sequential and parallel row
 and count plan checks, [pagination examples](page/example_test.go).
 
+## Read fallback
+
+`ReadWithFallback` runs a repeatable read on a replica and retries it once on the
+master only for connection, TLS, authentication or server-unavailability errors.
+Both attempts use the supplied context; cancellation or an expired overall
+context prevents fallback. A connection-establishment timeout may fall back while
+that context is still active. There is no preliminary Ping or retry loop.
+
+This fragment assumes initialized `replica` and `master` DBs, a non-nil `ctx`,
+and an enclosing function returning `([]string, error)`:
+
+```go
+return pgfx.ReadWithFallback(
+    ctx,
+    replica,
+    master,
+    func(ctx context.Context, db *pgfx.DB) ([]string, error) {
+        return db.FetchValues[string](ctx, "SELECT name FROM users ORDER BY id")
+    },
+)
+```
+
+Import `context` and `github.com/uchaloop/pgfx`. See the compiled
+[example](fallback_example_test.go). The callback can execute twice: do not write,
+call state-changing SQL functions or perform external side effects. Fully consume
+results before returning; do not return live rows, connections or transactions.
+The helper does not own or close either DB and adds no methods to Tx.
+
+`ErrNoRows`, SQL errors outside the connection/unavailability policy, constraints,
+scan errors and ordinary callback deadlines return immediately. The policy uses
+SQLSTATEs 08000, 08001, 08003, 08004, 08006, 08007, 08P01, 28000, 28P01,
+3D000, 53300 (too many connections) and 57P01 through 57P04, plus transport/TLS
+failures. Exhausted replica connection slots therefore permit one master attempt.
+The policy is independent of health-monitor configuration. Mixed joined errors
+fall back only when every branch qualifies. Unknown callback/hook errors do not
+qualify.
+
+The SQLSTATE selection is based on the official
+[PostgreSQL error-code appendix, Table A.1](https://www.postgresql.org/docs/current/errcodes-appendix.html).
+The appendix defines code meanings; the fallback allowlist is a pgfx policy, not
+a PostgreSQL retry recommendation. Only the codes listed above qualify, not
+their entire classes: for example, 57014 (query canceled) and 57P05 (idle session
+timeout) are excluded. Authentication and invalid-catalog failures are included
+to permit a read through a separately configured master.
+
+Any error returns the zero result. If both reads fail, the returned error wraps
+both causes for `errors.Is` and `errors.As`; it labels replica and master failures.
+Errors may contain database details: handle logging at the application boundary.
+
+For pagination, put the **entire** `pager.Fetch(ctx, db, params, list, count)` call
+inside the callback. A count failure discards the replica list and repeats both
+queries in a new master snapshot. Never fall back separately inside list/count
+or transfer an existing Tx. See the [integration example](fallback_integration_test.go).
+
 ## Transactions
 
 `DB.TransactionValue` returns a typed value after a successful commit. This

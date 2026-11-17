@@ -102,6 +102,13 @@ calculating bounds or creating a transaction. Its parallel option requires
 independent resources and does not guarantee a shared snapshot.
 See package [github.com/uchaloop/pgfx/page] for contracts and examples.
 
+# Read fallback
+
+[ReadWithFallback] repeats a fully consumed, side-effect-free read on master
+only when replica fails with a qualifying availability error. Both attempts
+share the caller context. Wrap an entire paginated read to preserve its snapshot;
+no existing transaction is transferred. See the function contract for error policy.
+
 # Transactions
 
 [DB.Transaction] commits when the callback returns nil and rolls back on an

@@ -7,6 +7,12 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `ReadWithFallback` for repeatable replica reads with one master fallback on
+  availability failures, shared context and preserved error causes. Existing
+  DB, Tx and Pager APIs are unchanged.
+
 ## [0.12.0] - 2026-11-17
 
 This release contains breaking API changes.
