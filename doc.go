@@ -12,19 +12,29 @@ constructs Config in Go or uses a loader of its choice. pgfx does not read a
 configuration source itself. Host and Database are required; optional fields
 retain their documented pgx defaults when unset.
 
+[Config.EnvPrefix] declares POSTGRES_ for compatible loaders without adding a
+loader dependency. The updated confmaker built-in engine can infer a default
+instance from it; confx.Provide[Config]() supplies that configuration untagged.
+Named master and replica registrations read MASTER_POSTGRES_* and
+REPLICA_POSTGRES_* while keeping their Fx names. The explicit name postgres
+still reads POSTGRES_*. A loader WithPrefix override replaces the whole prefix,
+so WithPrefix("MASTER_") preserves legacy master variables. Deploy renamed
+variables with the corresponding binary; pgfx never reads them itself.
+
 [MakeDB] creates a pool owned by the caller, who must close it. Pool creation does
 not verify connectivity; use Ping when startup verification is required.
-[MakeModule] supplies *Connection through Uber Fx. It creates and pings the pool
-on start and closes it on stop. Consumers call [Connection.DB] in their own
-OnStart hooks or after successful startup. Before readiness and after shutdown,
-the handle returns [ErrConnectionNotReady] or [ErrConnectionClosed], respectively.
+[MakeModule] supplies *DB through Uber Fx. It creates and pings the pool
+on start and closes it on stop. Consumers use DB directly in their own
+OnStart hooks or after successful startup. Constructors only store the pointer:
+the embedded Pool is nil until startup succeeds. Consumers finish their work
+in OnStop before the database hook closes the pool. They must not close it themselves.
 
-Fx constructs providers lazily: register a consumer of *Connection to activate
+Fx constructs providers lazily: register a consumer of *DB to activate
 its lifecycle hooks. The runnable examples/fx program registers a consumer,
 executes SELECT 1 in its OnStart hook, and stops the application. The examples
 for MakeModule and MakeModuleFor show untagged and named consumers.
 
-[MakeModuleFor] consumes a Config with an Fx name and provides a Connection with the same
+[MakeModuleFor] consumes a Config with an Fx name and provides a DB with the same
 name. Each named connection has its own configuration and runtime options.
 Both modules accept the same [Option] values as [MakeDB], applied after injected
 tracing and metrics defaults. Use [WithAfterConnect] for per-connection type
@@ -76,6 +86,10 @@ accept an empty result. Use
 FetchValue for a single-column INSERT or UPDATE with RETURNING, and FetchRow
 for multiple returned columns. Native pgx operations remain available directly.
 
+[DB.FetchOptionalRow] and [Tx.FetchOptionalRow] return a value, an isFound flag
+and an error. Only an empty successful query returns false with no error;
+FetchRow continues to require exactly one row.
+
 # Pagination
 
 [github.com/uchaloop/pgfx/page.MakePager] configures numbered pages once.
@@ -88,6 +102,13 @@ calculating bounds or creating a transaction. Its parallel option requires
 independent resources and does not guarantee a shared snapshot.
 See package [github.com/uchaloop/pgfx/page] for contracts and examples.
 
+# Read fallback
+
+[ReadWithFallback] repeats a fully consumed, side-effect-free read on master
+only when replica fails with a qualifying availability error. Both attempts
+share the caller context. Wrap an entire paginated read to preserve its snapshot;
+no existing transaction is transferred. See the function contract for error policy.
+
 # Transactions
 
 [DB.Transaction] commits when the callback returns nil and rolls back on an
@@ -96,6 +117,10 @@ that belongs to the transaction; calls through DB use the pool instead.
 [Tx.Transaction] provides the same callback style for a nested savepoint.
 [Tx.BeginNested] returns a typed savepoint when manual ownership is needed.
 Isolation and access mode are supplied through pgx.TxOptions.
+
+[DB.TransactionValue] returns a typed callback result after successful commit.
+[Tx.TransactionValue] releases a savepoint without committing the outer transaction.
+Both return a zero value on error and preserve Transaction error and panic semantics.
 
 # Tracing and metrics
 
@@ -111,24 +136,13 @@ with [WithSQLInQueryMetrics]. Use bounded names, not raw SQL, as metric labels.
 See [QueryMetric] and [QueryMetricFunc] for measurement boundaries, batch
 aggregation, partial results and pgx hook coverage limitations.
 
-# Optional rows
-
-DB.FetchOptionalRow and Tx.FetchOptionalRow return a value, an isFound flag and
-an error. Only an empty successful query returns false with no error; FetchRow
-continues to require exactly one row. IsConstraint matches a nonempty SQLSTATE
-and constraint name on the same first PostgreSQL error.
-
-# Transactions with values
-
-DB.TransactionValue returns a typed callback result after successful commit.
-Tx.TransactionValue releases a savepoint, without committing the outer transaction.
-Both return a zero value on error and preserve Transaction error and panic semantics.
-
 # Error classification and test support
 
 [AsPgError], [SQLState] and [IsSQLState] classify the first PostgreSQL error in an
 error tree without replacing it. Constraint and transaction-error predicates
 provide common checks; they do not establish that retrying is safe.
+[IsConstraint] matches a nonempty SQLSTATE and constraint name on the same
+first PostgreSQL error.
 [EscapeLike] escapes literal text for parameterized LIKE/ILIKE patterns with
 PostgreSQL's default backslash escape, not SQL or regular expressions.
 

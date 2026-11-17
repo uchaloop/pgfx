@@ -143,7 +143,7 @@ func ExampleFetch_transaction() {
 	// Prints [{7} {8}] 5.
 }
 
-// ExamplePager_Fetch выполняется через TestPageExamples с тегом integration.
+// ExamplePager_Fetch runs through TestPageExamples with the integration build tag.
 func ExamplePager_Fetch() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -182,7 +182,7 @@ func ExamplePager_Fetch() {
 		panic(err)
 	}
 
-	// Проверяем результат при запуске через интеграционный тест.
+	// Verify the result when invoked by the integration test.
 	if len(result.List) != 2 || result.List[0].ID != 3 || result.List[1].ID != 4 || result.Total != 5 {
 		panic("unexpected page result")
 	}

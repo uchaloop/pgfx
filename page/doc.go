@@ -1,7 +1,7 @@
-// Package page предоставляет пагинацию и объединение результатов списка и количества.
-// MakePager задаёт лимиты; Pager.Bounds рассчитывает границы, а Pager.Fetch
-// выполняет запросы в одной read-only REPEATABLE READ транзакции.
-// Приложение задаёт SQL, одинаковые фильтры и допустимую сортировку.
-// Fetch объединяет callbacks без расчёта границ и собственной транзакции;
-// WithParallel требует независимых ресурсов и не обеспечивает общий снимок.
+// Package page provides pagination and combines list and count results.
+// MakePager configures limits; Pager.Bounds calculates bounds, and Pager.Fetch
+// runs queries in one read-only REPEATABLE READ transaction.
+// The application supplies SQL, matching filters and allowed sort expressions.
+// Fetch combines callbacks without calculating bounds or opening a transaction;
+// WithParallel requires independent resources and does not ensure a shared snapshot.
 package page

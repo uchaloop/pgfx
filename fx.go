@@ -2,7 +2,6 @@ package pgfx
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -14,32 +13,16 @@ import (
 	"go.uber.org/fx"
 )
 
-// ErrConnectionNotReady reports access before successful lifecycle startup.
-var ErrConnectionNotReady = errors.New("connection is not ready")
-
-// ErrConnectionClosed reports access after lifecycle shutdown.
-var ErrConnectionClosed = errors.New("connection is closed")
-
-// Connection is an Fx-owned pool handle. Its zero value is not ready.
-// A Connection must not be copied after first use.
-type Connection struct {
-	mu           sync.RWMutex
-	db           *DB
-	isClosed     bool
-	healthCancel context.CancelFunc
-	healthDone   <-chan struct{}
-}
-
 // connectionHealth keeps runtime dependencies out of serializable Config.
 type connectionHealth struct {
 	shutdowner fx.Shutdowner
 	logger     *slog.Logger
 }
 
-// MakeModule provides an untagged *Connection from an untagged Config.
+// MakeModule provides an untagged *DB from an untagged Config.
 // Configuration is validated during construction. The pool is created and
-// pinged on start, then closed on stop. Consumers call Connection.DB in their
-// OnStart hooks or later. Config.Health optionally enables background checks
+// pinged on start, then closed on stop. Consumers only store DB in constructors
+// and run queries in their OnStart hooks or later. Config.Health enables background checks
 // and shutdown on sustained failure. Tracing, query metrics and *slog.Logger
 // are optional dependencies. Enabled health checks require HealthModule at
 // the application root.
@@ -48,21 +31,21 @@ type connectionHealth struct {
 // and metrics defaults. Later options override earlier settings where applicable;
 // nil options are ignored. The option slice is copied when the module is built.
 func MakeModule(opts ...Option) fx.Option {
-	return fx.Module("pgfx", makeConnectionProvider("", opts...))
+	return fx.Module("pgfx", makeDBProvider("", opts...))
 }
 
 // MakeModuleFor is an Fx module for a named connection - a replica or another shard.
-// It consumes a pgfx.Config tagged name:"<name>" and provides a *Connection tagged
+// It consumes a pgfx.Config tagged name:"<name>" and provides a *DB tagged
 // the same; a consumer selects it with fx.ParamTags. The application supplies
 // the tagged Config explicitly, for example with fx.Supply and fx.ResultTags.
 // opts configure only this connection, with the same ordering as MakeModule.
 func MakeModuleFor(name string, opts ...Option) fx.Option {
-	return fx.Module("pgfx-"+name, makeConnectionProvider(name, opts...))
+	return fx.Module("pgfx-"+name, makeDBProvider(name, opts...))
 }
 
-// makeConnectionProvider builds the annotated constructor for a connection whose
+// makeDBProvider builds the annotated constructor for a connection whose
 // Config carries the given name (empty for the untagged default).
-func makeConnectionProvider(name string, opts ...Option) fx.Option {
+func makeDBProvider(name string, opts ...Option) fx.Option {
 	opts = slices.Clone(opts)
 
 	var tag string
@@ -80,7 +63,7 @@ func makeConnectionProvider(name string, opts ...Option) fx.Option {
 				queryMetrics QueryMetricFunc,
 				shutdowner fx.Shutdowner,
 				logger *slog.Logger,
-			) (*Connection, error) {
+			) (*DB, error) {
 				if logger == nil {
 					logger = slog.Default()
 				}
@@ -90,7 +73,7 @@ func makeConnectionProvider(name string, opts ...Option) fx.Option {
 					label = "default"
 				}
 
-				return makeConnection(
+				return makeLifecycleDB(
 					cfg,
 					lifecycle,
 					tracerProvider,
@@ -112,16 +95,16 @@ func makeConnectionProvider(name string, opts ...Option) fx.Option {
 	)
 }
 
-// makeConnection builds a handle from the injected Config and optional runtime
+// makeLifecycleDB builds a handle from the injected Config and optional runtime
 // dependencies, and registers its lifecycle.
-func makeConnection(
+func makeLifecycleDB(
 	cfg Config,
 	lifecycle fx.Lifecycle,
 	tracerProvider trace.TracerProvider,
 	queryMetrics QueryMetricFunc,
 	health connectionHealth,
 	explicitOpts ...Option,
-) (*Connection, error) {
+) (*DB, error) {
 	var opts []Option
 
 	if tracerProvider != nil {
@@ -150,7 +133,11 @@ func makeConnection(
 		return nil, err
 	}
 
-	connection := &Connection{}
+	db := &DB{}
+	var mu sync.Mutex
+	var isStopped bool
+	var cancel context.CancelFunc
+	var done chan struct{}
 
 	lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
@@ -165,22 +152,21 @@ func makeConnection(
 				return err
 			}
 
-			connection.mu.Lock()
-			if connection.isClosed {
-				connection.mu.Unlock()
+			mu.Lock()
+			if isStopped {
+				mu.Unlock()
 				pool.Close()
 
-				return ErrConnectionClosed
+				return context.Canceled
 			}
 
-			connection.db = &DB{Pool: pool}
+			db.Pool = pool
 
 			if cfg.Health.IsEnabled {
 				// The monitor belongs to this connection, not the startup context.
-				monitorCtx, cancel := context.WithCancel(context.Background())
-				done := make(chan struct{})
-				connection.healthCancel = cancel
-				connection.healthDone = done
+				var monitorCtx context.Context
+				monitorCtx, cancel = context.WithCancel(context.Background())
+				done = make(chan struct{})
 
 				go func() {
 					defer close(done)
@@ -190,10 +176,10 @@ func makeConnection(
 						cfg.Health,
 						pool.Ping,
 						func() error {
-							connection.mu.Lock()
-							defer connection.mu.Unlock()
+							mu.Lock()
+							defer mu.Unlock()
 
-							if connection.isClosed {
+							if isStopped {
 								return nil
 							}
 
@@ -205,54 +191,29 @@ func makeConnection(
 				}()
 			}
 
-			connection.mu.Unlock()
+			mu.Unlock()
 
 			return nil
 		},
 		OnStop: func(context.Context) error {
-			connection.close()
+			mu.Lock()
+			isStopped = true
+			mu.Unlock()
+
+			if cancel != nil {
+				cancel()
+				<-done
+			}
+
+			if db.Pool != nil {
+				db.Close()
+			}
 
 			return nil
 		},
 	})
 
-	return connection, nil
-}
-
-// DB returns a borrowed, initialized database after successful startup.
-// The caller must not close it. Shutdown closes the pool and waits for acquired
-// connections to be released; a previously returned DB does not extend its life.
-func (c *Connection) DB() (*DB, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.isClosed {
-		return nil, ErrConnectionClosed
-	}
-
-	if c.db == nil {
-		return nil, ErrConnectionNotReady
-	}
-
-	return c.db, nil
-}
-
-func (c *Connection) close() {
-	c.mu.Lock()
-	c.isClosed = true
-	db := c.db
-	c.db = nil
-	cancel, done := c.healthCancel, c.healthDone
-	c.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-		<-done
-	}
-
-	if db != nil {
-		db.Close()
-	}
+	return db, nil
 }
 
 func (h connectionHealth) requestShutdown() error {

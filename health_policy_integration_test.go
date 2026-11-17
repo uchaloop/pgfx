@@ -78,7 +78,7 @@ func TestHealthSQLStateNamedPools(t *testing.T) {
 		fx.Supply(cfg, fx.Annotate(cfg, fx.ResultTags(`name:"replica"`))),
 		MakeModule(WithHealthSQLStates("57P03"), hook(true)),
 		MakeModuleFor("replica", WithHealthSQLStates("53300"), hook(false)),
-		fx.Invoke(fx.Annotate(func(*Connection, *Connection) {}, fx.ParamTags(``, `name:"replica"`))),
+		fx.Invoke(fx.Annotate(func(*DB, *DB) {}, fx.ParamTags(``, `name:"replica"`))),
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -117,7 +117,7 @@ func TestHealthSQLStateNamedPools(t *testing.T) {
 
 func TestHealthSQLStateStartupNotFiltered(t *testing.T) {
 	cfg := makeHealthIntegrationConfig(t)
-	var connection *Connection
+	var connection *DB
 	app := fx.New(
 		fx.NopLogger,
 		HealthModule,
@@ -138,8 +138,8 @@ func TestHealthSQLStateStartupNotFiltered(t *testing.T) {
 	if SQLState(err) != "53300" {
 		t.Fatalf("startup error: %v", err)
 	}
-	if _, err := connection.DB(); !errors.Is(err, ErrConnectionNotReady) {
-		t.Fatalf("published DB after failed startup: %v", err)
+	if connection.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 }
 

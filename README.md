@@ -24,7 +24,7 @@ go get github.com/uchaloop/pgfx
 ```
 
 This README describes the current source tree, including changes in
-[0.11.0](CHANGELOG.md#0110---2026-11-17). The install command resolves the latest
+[0.12.0](CHANGELOG.md#0120---2026-11-17). The install command resolves the latest
 published version, which may have a different API. For these examples, use this
 checkout; for a published version, read the README at its tag.
 The API may change between 0.x releases without backward compatibility.
@@ -99,6 +99,7 @@ func run() error {
 	}
 
 	fmt.Println(value)
+
 	return nil
 }
 ```
@@ -129,11 +130,12 @@ connections and other native operations remain available.
 
 ### Fx lifecycle and named connections
 
-`MakeModule()` provides `*Connection`, not `*DB`. Fx constructs providers lazily, so
-register a consumer of the handle. The module creates and pings the pool in
-`OnStart` and closes it in `OnStop`. A consumer calls `Connection.DB()` in its
-own `OnStart` hook or after successful startup. The returned database is
-borrowed: do not close it yourself.
+`MakeModule()` provides `*DB` directly. Fx constructs providers lazily, so
+register a consumer of `*DB`. The module creates and pings its embedded pool in
+`OnStart` and closes it in `OnStop`. Constructors only store the pointer; queries
+run in consumer `OnStart` hooks or after successful startup. Consumers finish
+work in their `OnStop` hooks, before the pool is closed. Do not close the
+lifecycle-owned database yourself.
 
 The complete [Fx example](examples/fx/main.go) registers a consumer, queries
 `SELECT 1` during startup and stops the application. With the same environment
@@ -167,7 +169,7 @@ func registerTypes(ctx context.Context, conn *pgx.Conn) error {
 
 Create `public.order_status` in a migration before starting the application.
 The enum is registered before its array. This fragment requires `context` and
-`github.com/jackc/pgx/v5`. Wire it alongside your Config and Connection consumer:
+`github.com/jackc/pgx/v5`. Wire it alongside your Config and DB consumer:
 
 ```go
 pgfx.MakeModule(pgfx.WithAfterConnect(registerTypes))
@@ -180,7 +182,8 @@ injected tracing and metrics defaults. Later hook options replace earlier ones;
 `WithAfterConnect(nil)` clears the hook, and nil options are ignored. Combine
 multiple registration steps in one callback. Callbacks must honor their context
 and support concurrent calls on different connections. A callback error rejects
-the connection; if startup Ping fails, Fx startup fails without publishing a DB.
+the connection. If startup Ping fails, Fx startup fails and closes the temporary
+pool; the already-provided DB keeps a nil Pool.
 See the compiled [type-registration example](example_test.go).
 
 ### Pool lifecycle hooks
@@ -196,7 +199,7 @@ native pgxpool callbacks without changing their semantics:
 | `WithShouldPing` | `func(context.Context, pgxpool.ShouldPingParams) bool` | Decide whether Acquire performs an automatic ping |
 
 For example, prepare session state whenever a connection is acquired. This
-fragment assumes an existing Config and Connection consumer and imports
+fragment assumes an existing Config and DB consumer and imports
 `context`, `github.com/jackc/pgx/v5` and `github.com/uchaloop/pgfx`:
 
 ```go
@@ -247,7 +250,7 @@ cfg.Health = pgfx.HealthConfig{
 ```
 
 Add `HealthModule` **once at the application root**, alongside `MakeModule` and a
-consumer of `*Connection`. This fragment assumes `cfg` above and an existing
+consumer of `*DB`. This fragment assumes `cfg` above and an existing
 `registerService` consumer (additional import: `go.uber.org/fx`):
 
 ```go
@@ -356,9 +359,22 @@ contain sensitive literals. See the [metrics example](example_test.go).
 
 [confmaker](https://github.com/uchaloop/confmaker) and
 [confx](https://github.com/uchaloop/confx) can load `Config` using its `env` tags.
-They are optional and are not dependencies of pgfx. Register the instance name
-`postgres` explicitly with your loader to use the `POSTGRES_` prefix; `Config`
-does not select an instance name or read environment variables itself.
+They are optional and are not dependencies of pgfx. `Config.EnvPrefix()` declares
+`POSTGRES_`; pgfx does not read environment variables itself.
+
+With the updated confmaker built-in engine and confx default-registration API,
+`confx.Provide[pgfx.Config]()` supplies an untagged config from `POSTGRES_*`.
+An explicit `postgres` name uses the same prefix without duplication.
+`confx.ProvideNamed[pgfx.Config]("master")` retains the Fx name `master` and reads
+`MASTER_POSTGRES_*`; `replica` similarly reads `REPLICA_POSTGRES_*`.
+Nested settings retain their suffixes, such as `MASTER_POSTGRES_TLS_MODE`.
+
+This changes ENV names for existing named configurations when adopting a
+loader that supports type prefixes. Migrate the binary and deployment ENV keys
+together. To retain the old names explicitly, use
+`confx.ProvideNamed[pgfx.Config]("master", confmaker.WithPrefix("MASTER_"))`.
+The override replaces the complete ENV prefix without changing the Fx name.
+Older loaders keep their explicit-name behavior and do not infer this prefix.
 
 For such a loader, representative settings are:
 
@@ -509,6 +525,60 @@ returned-row limit does not bound database work. See
 [pagination-lab](CONTRIBUTING.md#pagination-lab) for sequential and parallel row
 and count plan checks, [pagination examples](page/example_test.go).
 
+## Read fallback
+
+`ReadWithFallback` runs a repeatable read on a replica and retries it once on the
+master only for connection, TLS, authentication or server-unavailability errors.
+Both attempts use the supplied context; cancellation or an expired overall
+context prevents fallback. A connection-establishment timeout may fall back while
+that context is still active. There is no preliminary Ping or retry loop.
+
+This fragment assumes initialized `replica` and `master` DBs, a non-nil `ctx`,
+and an enclosing function returning `([]string, error)`:
+
+```go
+return pgfx.ReadWithFallback(
+    ctx,
+    replica,
+    master,
+    func(ctx context.Context, db *pgfx.DB) ([]string, error) {
+        return db.FetchValues[string](ctx, "SELECT name FROM users ORDER BY id")
+    },
+)
+```
+
+Import `context` and `github.com/uchaloop/pgfx`. See the compiled
+[example](fallback_example_test.go). The callback can execute twice: do not write,
+call state-changing SQL functions or perform external side effects. Fully consume
+results before returning; do not return live rows, connections or transactions.
+The helper does not own or close either DB and adds no methods to Tx.
+
+`ErrNoRows`, SQL errors outside the connection/unavailability policy, constraints,
+scan errors and ordinary callback deadlines return immediately. The policy uses
+SQLSTATEs 08000, 08001, 08003, 08004, 08006, 08007, 08P01, 28000, 28P01,
+3D000, 53300 (too many connections) and 57P01 through 57P04, plus transport/TLS
+failures. Exhausted replica connection slots therefore permit one master attempt.
+The policy is independent of health-monitor configuration. Mixed joined errors
+fall back only when every branch qualifies. Unknown callback/hook errors do not
+qualify.
+
+The SQLSTATE selection is based on the official
+[PostgreSQL error-code appendix, Table A.1](https://www.postgresql.org/docs/current/errcodes-appendix.html).
+The appendix defines code meanings; the fallback allowlist is a pgfx policy, not
+a PostgreSQL retry recommendation. Only the codes listed above qualify, not
+their entire classes: for example, 57014 (query canceled) and 57P05 (idle session
+timeout) are excluded. Authentication and invalid-catalog failures are included
+to permit a read through a separately configured master.
+
+Any error returns the zero result. If both reads fail, the returned error wraps
+both causes for `errors.Is` and `errors.As`; it labels replica and master failures.
+Errors may contain database details: handle logging at the application boundary.
+
+For pagination, put the **entire** `pager.Fetch(ctx, db, params, list, count)` call
+inside the callback. A count failure discards the replica list and repeats both
+queries in a new master snapshot. Never fall back separately inside list/count
+or transfer an existing Tx. See the [integration example](fallback_integration_test.go).
+
 ## Transactions
 
 `DB.TransactionValue` returns a typed value after a successful commit. This
@@ -538,16 +608,15 @@ provide typed pgx savepoints. Native `DB.Begin` and `DB.BeginTx` return `pgx.Tx`
 See the [transaction examples](example_test.go) and the
 [complete TransactionValue example](transaction_value_example_test.go).
 
-`Pager.Fetch` owns a read-only REPEATABLE READ transaction; `page.Fetch` does
-not create one. See [Pagination](#pagination) to choose the appropriate API.
+See [Pagination](#pagination) for transaction ownership in pagination helpers.
 
 ## Errors and diagnostics
 
 - `FetchRow` and `FetchValue` return `pgx.ErrNoRows` or `pgx.ErrTooManyRows` unless exactly
   one row is returned. Plural fetches accept empty results. Use `errors.Is` for
   sentinel errors and `errors.As` for PostgreSQL errors.
-- `Connection.DB` returns `ErrConnectionNotReady` before successful startup and
-  `ErrConnectionClosed` after shutdown. A borrowed handle does not extend pool lifetime.
+- For Fx startup and shutdown requirements, see
+  [Fx lifecycle and named connections](#fx-lifecycle-and-named-connections).
 - Use `errors.Is(err, page.ErrParams)` for invalid pager configuration or offset
   overflow. Validate application filters and allowed sort fields separately;
   neither pagination API builds SQL.

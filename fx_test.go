@@ -3,7 +3,6 @@ package pgfx
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -27,7 +26,7 @@ func TestMultiplePoolsGraphNoConflict(t *testing.T) {
 		MakeModuleFor("replica"),
 		MakeModuleFor("analytics"),
 		fx.Invoke(fx.Annotate(
-			func(primary, replica, analytics *Connection) {},
+			func(primary, replica, analytics *DB) {},
 			fx.ParamTags(``, `name:"replica"`, `name:"analytics"`),
 		)),
 	)
@@ -42,7 +41,7 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 	primaryCfg := Config{Host: "primary:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 	replicaCfg := Config{Host: "replica:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 
-	var primary, replica *Connection
+	var primary, replica *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(primaryCfg),
@@ -50,7 +49,7 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 		MakeModule(),
 		MakeModuleFor("replica"),
 		fx.Invoke(fx.Annotate(
-			func(p, r *Connection) { primary, replica = p, r },
+			func(p, r *DB) { primary, replica = p, r },
 			fx.ParamTags(``, `name:"replica"`),
 		)),
 	)
@@ -72,19 +71,19 @@ func TestMultiplePoolsAreDistinct(t *testing.T) {
 func TestMakeModuleBuildsWithoutPassword(t *testing.T) {
 	cfg := Config{Host: "h", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 
-	var pool *Connection
+	var pool *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
 		MakeModule(),
-		fx.Invoke(func(p *Connection) { pool = p }),
+		fx.Invoke(func(p *DB) { pool = p }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("passwordless build: %v", err)
 	}
 
-	if _, err := pool.DB(); err != ErrConnectionNotReady {
-		t.Fatalf("readiness: %v", err)
+	if pool.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 }
 
@@ -93,16 +92,16 @@ func TestMakeModuleRequiresConfig(t *testing.T) {
 	err := fx.ValidateApp(
 		fx.NopLogger,
 		MakeModule(),
-		fx.Invoke(func(*Connection) {}),
+		fx.Invoke(func(*DB) {}),
 	)
 	if err == nil {
 		t.Fatal("expected ValidateApp to fail without a Config")
 	}
 }
 
-func TestConnectionBeforeStartReturnsError(t *testing.T) {
+func TestDBBeforeStartHasNoPool(t *testing.T) {
 	var lifecycle capturedLifecycle
-	c, err := makeConnection(
+	c, err := makeLifecycleDB(
 		makeValidConfig(),
 		&lifecycle,
 		nil,
@@ -113,20 +112,19 @@ func TestConnectionBeforeStartReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if db, err := c.DB(); db != nil || !errors.Is(err, ErrConnectionNotReady) {
-		t.Fatalf("DB before start: %v, %v", db, err)
+	if c.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 }
 
-func TestConnectionReadinessDuringConstruction(t *testing.T) {
+func TestDBConstructionDoesNotCreatePool(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeValidConfig()),
 		MakeModule(),
-		fx.Invoke(func(c *Connection) error {
-			_, err := c.DB()
-			if !errors.Is(err, ErrConnectionNotReady) {
-				t.Fatalf("constructor readiness: %v", err)
+		fx.Invoke(func(c *DB) error {
+			if c.Pool != nil {
+				t.Fatal("pool allocated during construction")
 			}
 
 			return nil
@@ -137,31 +135,8 @@ func TestConnectionReadinessDuringConstruction(t *testing.T) {
 	}
 }
 
-func TestConnectionConcurrentReadAndClose(t *testing.T) {
-	var c Connection
-	var wg sync.WaitGroup
-
-	for range 16 {
-		wg.Go(func() {
-			for range 100 {
-				db, err := c.DB()
-				if db != nil || (!errors.Is(err, ErrConnectionNotReady) && !errors.Is(err, ErrConnectionClosed)) {
-					t.Errorf("unexpected state: %v, %v", db, err)
-				}
-			}
-		})
-	}
-
-	c.close()
-	wg.Wait()
-	c.close()
-	if _, err := c.DB(); !errors.Is(err, ErrConnectionClosed) {
-		t.Fatal(err)
-	}
-}
-
 func TestMakeModuleCancelledStartDoesNotAllocatePool(t *testing.T) {
-	var db *Connection
+	var db *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeValidConfig()),
@@ -182,7 +157,7 @@ func TestMakeModuleCancelledStartDoesNotAllocatePool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if ready, _ := db.DB(); ready != nil {
+	if db.Pool != nil {
 		t.Fatal("pool allocated despite cancelled startup")
 	}
 }
@@ -200,7 +175,7 @@ func TestMakeModulePingFailureDoesNotPublishPool(t *testing.T) {
 		Timeout:      time.Second,
 		FailureAfter: time.Minute,
 	}
-	db, err := makeConnection(
+	db, err := makeLifecycleDB(
 		cfg,
 		&lifecycle,
 		nil,
@@ -217,18 +192,14 @@ func TestMakeModulePingFailureDoesNotPublishPool(t *testing.T) {
 		t.Fatalf("OnStart: %v", err)
 	}
 
-	if db.healthDone != nil {
-		t.Fatal("monitor started after failed startup")
-	}
-
-	if ready, err := db.DB(); ready != nil || !errors.Is(err, ErrConnectionNotReady) {
-		t.Fatalf("failed startup published a database: %v, %v", ready, err)
+	if db.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 }
 
 func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
 	errExpected := errors.New("earlier hook failed")
-	var db *Connection
+	var db *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeValidConfig()),
@@ -250,7 +221,7 @@ func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if ready, _ := db.DB(); ready != nil {
+	if db.Pool != nil {
 		t.Fatal("pool allocated after an earlier hook failed")
 	}
 }

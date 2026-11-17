@@ -5,7 +5,6 @@ package pgfx
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -20,7 +19,7 @@ func TestHealthFxPoolUnavailable(t *testing.T) {
 	for _, name := range []string{"", "replica"} {
 		t.Run("connection_"+name, func(t *testing.T) {
 			cfg := makeHealthIntegrationConfig(t)
-			var connection *Connection
+			var connection *DB
 			var logs bytes.Buffer
 			app := makeHealthTestApp(
 				cfg,
@@ -37,10 +36,7 @@ func TestHealthFxPoolUnavailable(t *testing.T) {
 				}
 			}()
 
-			db, err := connection.DB()
-			if err != nil {
-				t.Fatal(err)
-			}
+			db := connection
 
 			acquired, err := db.Acquire(context.Background())
 			if err != nil {
@@ -67,7 +63,7 @@ func TestHealthFxRecoveryAndDisabled(t *testing.T) {
 		t.Run(map[bool]string{true: "recovery", false: "disabled"}[isEnabled], func(t *testing.T) {
 			cfg := makeHealthIntegrationConfig(t)
 			cfg.Health.IsEnabled = isEnabled
-			var connection *Connection
+			var connection *DB
 			var logs bytes.Buffer
 			app := makeHealthTestApp(
 				cfg,
@@ -84,10 +80,7 @@ func TestHealthFxRecoveryAndDisabled(t *testing.T) {
 				}
 			}()
 
-			db, err := connection.DB()
-			if err != nil {
-				t.Fatal(err)
-			}
+			db := connection
 
 			acquired, err := db.Acquire(context.Background())
 			if err != nil {
@@ -134,7 +127,7 @@ func TestHealthPostgresRestart(t *testing.T) {
 
 	cfg := makeHealthIntegrationConfig(t)
 	cfg.Health.FailureAfter = 3 * time.Second
-	var connection *Connection
+	var connection *DB
 	var logs bytes.Buffer
 	app := makeHealthTestApp(
 		cfg,
@@ -191,10 +184,7 @@ func TestHealthPostgresRestart(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	control("start")
-	db, err := connection.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := connection
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -234,8 +224,8 @@ func TestHealthPostgresRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := connection.DB(); !errors.Is(err, ErrConnectionClosed) {
-		t.Fatalf("connection remained open: %v", err)
+	if err := connection.Ping(context.Background()); err == nil {
+		t.Fatal("pool remained open")
 	}
 
 	if !strings.Contains(logs.String(), "database health restored") {
@@ -257,7 +247,7 @@ func makeHealthIntegrationConfig(t *testing.T) Config {
 	return cfg
 }
 
-func makeHealthTestApp(cfg Config, name string, connection **Connection, logs *bytes.Buffer) *fx.App {
+func makeHealthTestApp(cfg Config, name string, connection **DB, logs *bytes.Buffer) *fx.App {
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	if len(name) == 0 {
 		return fx.New(
@@ -274,20 +264,20 @@ func makeHealthTestApp(cfg Config, name string, connection **Connection, logs *b
 		HealthModule,
 		fx.Supply(fx.Annotate(cfg, fx.ResultTags(`name:"`+name+`"`)), logger),
 		MakeModuleFor(name, WithHealthSQLStates(DefaultHealthSQLStates()...)),
-		fx.Invoke(fx.Annotate(func(c *Connection) { *connection = c }, fx.ParamTags(`name:"`+name+`"`))),
+		fx.Invoke(fx.Annotate(func(c *DB) { *connection = c }, fx.ParamTags(`name:"`+name+`"`))),
 	)
 }
 
 func TestHealthFxMultiplePools(t *testing.T) {
 	cfg := makeHealthIntegrationConfig(t)
-	var primary, replica *Connection
+	var primary, replica *DB
 	app := fx.New(
 		fx.NopLogger,
 		HealthModule,
 		fx.Supply(cfg, fx.Annotate(cfg, fx.ResultTags(`name:"replica"`))),
 		MakeModule(WithHealthSQLStates(DefaultHealthSQLStates()...)),
 		MakeModuleFor("replica"),
-		fx.Invoke(fx.Annotate(func(p, r *Connection) { primary, replica = p, r }, fx.ParamTags(``, `name:"replica"`))),
+		fx.Invoke(fx.Annotate(func(p, r *DB) { primary, replica = p, r }, fx.ParamTags(``, `name:"replica"`))),
 	)
 	if err := app.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -298,11 +288,8 @@ func TestHealthFxMultiplePools(t *testing.T) {
 		}
 	}()
 
-	for _, c := range []*Connection{primary, replica} {
-		db, err := c.DB()
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, c := range []*DB{primary, replica} {
+		db := c
 
 		acquired, err := db.Acquire(context.Background())
 		if err != nil {
@@ -319,14 +306,6 @@ func TestHealthFxMultiplePools(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("no shutdown")
 	}
-	// Both monitors finish independently, even if Fx already has a signal.
-	for _, c := range []*Connection{primary, replica} {
-		select {
-		case <-c.healthDone:
-		case <-time.After(3 * time.Second):
-			t.Fatal("monitor did not finish")
-		}
-	}
 }
 
 func TestHealthFxStopCancelsMonitorBeforePoolClose(t *testing.T) {
@@ -334,7 +313,7 @@ func TestHealthFxStopCancelsMonitorBeforePoolClose(t *testing.T) {
 	cfg.Health.Interval = time.Second
 	cfg.Health.Timeout = time.Second
 	cfg.Health.FailureAfter = time.Minute
-	var connection *Connection
+	var connection *DB
 	var logs bytes.Buffer
 	app := makeHealthTestApp(
 		cfg,
@@ -346,10 +325,7 @@ func TestHealthFxStopCancelsMonitorBeforePoolClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := connection.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := connection
 
 	acquired, err := db.Acquire(context.Background())
 	if err != nil {
@@ -362,9 +338,9 @@ func TestHealthFxStopCancelsMonitorBeforePoolClose(t *testing.T) {
 	go func() { stopped <- app.Stop(context.Background()) }()
 
 	select {
-	case <-connection.healthDone:
+	case <-app.Wait():
+		t.Fatal("normal stop requested shutdown")
 	case <-time.After(2 * time.Second):
-		t.Fatal("monitor waited for pool close")
 	}
 
 	acquired.Release()

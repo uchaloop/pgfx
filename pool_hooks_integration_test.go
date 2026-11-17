@@ -32,7 +32,7 @@ func makePoolHooksTestDB(t *testing.T, mode string, opts ...Option) *DB {
 		return db
 	}
 
-	var connection *Connection
+	var connection *DB
 	supply := fx.Supply(cfg)
 	module := MakeModule(opts...)
 	consumer := fx.Populate(&connection)
@@ -40,7 +40,7 @@ func makePoolHooksTestDB(t *testing.T, mode string, opts ...Option) *DB {
 		supply = fx.Supply(fx.Annotate(cfg, fx.ResultTags(`name:"replica"`)))
 		module = MakeModuleFor("replica", opts...)
 		consumer = fx.Invoke(fx.Annotate(
-			func(c *Connection) { connection = c },
+			func(c *DB) { connection = c },
 			fx.ParamTags(`name:"replica"`),
 		))
 	}
@@ -63,10 +63,7 @@ func makePoolHooksTestDB(t *testing.T, mode string, opts ...Option) *DB {
 			t.Error(err)
 		}
 	})
-	db, err := connection.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := connection
 
 	return db
 }

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -111,21 +110,16 @@ func TestPostgresIntegration(t *testing.T) {
 }
 
 func TestFxLifecycleIntegration(t *testing.T) {
-	var connection *Connection
+	var connection *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(makeIntegrationConfig(t, 5*time.Second)),
 		MakeModule(),
-		fx.Invoke(func(lc fx.Lifecycle, got *Connection) {
+		fx.Invoke(func(lc fx.Lifecycle, got *DB) {
 			connection = got
 			lc.Append(fx.Hook{
 				OnStart: func(ctx context.Context) error {
-					db, err := got.DB()
-					if err != nil {
-						return err
-					}
-
-					return db.Ping(ctx)
+					return got.Ping(ctx)
 				},
 			})
 		}),
@@ -134,41 +128,7 @@ func TestFxLifecycleIntegration(t *testing.T) {
 		t.Fatalf("build Fx app: %v", err)
 	}
 
-	t.Cleanup(func() {
-		if connection != nil {
-			connection.close()
-		}
-	})
-
-	done := make(chan struct{})
-	var readers sync.WaitGroup
-
-	for range 4 {
-		readers.Go(func() {
-			for {
-				select {
-				case <-done:
-					return
-				default:
-					db, err := connection.DB()
-					if err == nil {
-						if db == nil || db.Pool == nil {
-							t.Error("published uninitialized database")
-
-							return
-						}
-
-						_ = db.Config()
-					} else if !errors.Is(err, ErrConnectionNotReady) && !errors.Is(err, ErrConnectionClosed) {
-						t.Errorf("unexpected readiness error: %v", err)
-
-						return
-					}
-				}
-			}
-		})
-	}
-	defer func() { close(done); readers.Wait() }()
+	t.Cleanup(func() { _ = app.Stop(context.Background()) })
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer startCancel()
@@ -177,12 +137,7 @@ func TestFxLifecycleIntegration(t *testing.T) {
 		t.Fatalf("start Fx app: %v", err)
 	}
 
-	pool, err := connection.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := pool.Ping(startCtx); err != nil {
+	if err := connection.Ping(startCtx); err != nil {
 		t.Fatalf("ping after start: %v", err)
 	}
 
@@ -193,13 +148,10 @@ func TestFxLifecycleIntegration(t *testing.T) {
 		t.Fatalf("stop Fx app: %v", err)
 	}
 
-	if _, err := connection.DB(); !errors.Is(err, ErrConnectionClosed) {
-		t.Fatalf("after stop: %v", err)
+	if err := connection.Ping(context.Background()); err == nil {
+		t.Fatal("pool remained open")
 	}
 
-	if err := pool.Ping(context.Background()); err == nil {
-		t.Fatal("ping after stop succeeded; pool was not closed")
-	}
 }
 
 func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
@@ -210,22 +162,18 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 		Timeouts: TimeoutConfig{Connect: 200 * time.Millisecond},
 	}
 
-	var connection *Connection
+	var connection *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
 		MakeModule(),
-		fx.Invoke(func(got *Connection) { connection = got }),
+		fx.Invoke(func(got *DB) { connection = got }),
 	)
 	if err := app.Err(); err != nil {
 		t.Fatalf("build Fx app: %v", err)
 	}
 
-	t.Cleanup(func() {
-		if connection != nil {
-			connection.close()
-		}
-	})
+	t.Cleanup(func() { _ = app.Stop(context.Background()) })
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer startCancel()
@@ -234,8 +182,8 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 		t.Fatal("Fx app started with an unreachable PostgreSQL endpoint")
 	}
 
-	if db, err := connection.DB(); db != nil || !errors.Is(err, ErrConnectionNotReady) {
-		t.Fatalf("failed startup: %v, %v", db, err)
+	if connection.Pool != nil {
+		t.Fatal("pool published before successful start")
 	}
 }
 
@@ -282,4 +230,73 @@ func testEnv(name, fallback string) string {
 	}
 
 	return fallback
+}
+
+// The consumer receives the same DB before startup and stops before the pool closes.
+func TestFxDBConsumerLifecycle(t *testing.T) {
+	var db *DB
+	var isStopped bool
+	app := fx.New(
+		fx.NopLogger,
+		fx.Supply(makeIntegrationConfig(t, 5*time.Second)),
+		MakeModule(),
+		fx.Invoke(func(lc fx.Lifecycle, got *DB) {
+			db = got
+			if db.Pool != nil {
+				t.Fatal("pool allocated during construction")
+			}
+			lc.Append(fx.Hook{
+				OnStart: func(ctx context.Context) error {
+					value, err := db.FetchValue[int](ctx, "SELECT 1")
+					if err == nil && value != 1 {
+						return errors.New("unexpected value")
+					}
+					return err
+				},
+				OnStop: func(ctx context.Context) error { isStopped = true; return db.Ping(ctx) },
+			})
+		}),
+	)
+	if err := app.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+	if err := app.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !isStopped {
+		t.Fatal("consumer stop hook not called")
+	}
+	if err := db.Ping(t.Context()); err == nil {
+		t.Fatal("pool not closed")
+	}
+}
+
+// A later hook failure closes the already-started pool during startup rollback.
+func TestFxDBLaterStartFailureClosesPool(t *testing.T) {
+	var db *DB
+	errExpected := errors.New("consumer start failed")
+	app := fx.New(
+		fx.NopLogger,
+		fx.Supply(makeIntegrationConfig(t, 5*time.Second)),
+		MakeModule(),
+		fx.Invoke(func(lc fx.Lifecycle, got *DB) {
+			db = got
+			lc.Append(fx.Hook{OnStart: func(ctx context.Context) error {
+				if err := db.Ping(ctx); err != nil {
+					return err
+				}
+				return errExpected
+			}})
+		}),
+	)
+	if err := app.Start(t.Context()); !errors.Is(err, errExpected) {
+		t.Fatalf("start: %v", err)
+	}
+	if db.Pool == nil {
+		t.Fatal("database hook did not start")
+	}
+	if err := db.Ping(t.Context()); err == nil {
+		t.Fatal("pool not closed after rollback")
+	}
 }
