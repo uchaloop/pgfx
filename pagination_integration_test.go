@@ -5,6 +5,7 @@ package pgfx_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +14,9 @@ import (
 	"github.com/uchaloop/pgfx/page"
 )
 
-// TestPageFetchIntegration walks a table whose sort column repeats, which is
+// TestFetchPageIntegration walks a table whose sort column repeats, which is
 // where a page without a tie order starts losing and duplicating rows.
-func TestPageFetchIntegration(t *testing.T) {
+func TestFetchPageIntegration(t *testing.T) {
 	t.Setenv("PGFX_TEST_MAX_CONNS", "1")
 	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
 	t.Cleanup(cleanup)
@@ -57,39 +58,34 @@ func TestPageFetchIntegration(t *testing.T) {
 	}
 
 	type pageItem struct {
-		ID    int64             `db:"id"    json:"id"`
-		Grade string            `db:"grade" json:"grade"`
+		ID    int64             `db:"id"`
+		Grade string            `db:"grade"`
 		Meta  map[string]string `db:"meta"`
 	}
 
-	fetch := func(ctx context.Context, offset int) (page.Result[pageItem], error) {
-		return page.Fetch(
-			ctx,
-			func(ctx context.Context) ([]pageItem, error) {
-				return db.FetchRows[pageItem](
-					ctx,
-					"SELECT id, grade, jsonb_build_object('country', country) AS meta FROM "+table+" WHERE country = $1 ORDER BY grade DESC, id ASC LIMIT $2 OFFSET $3",
-					"TR",
-					3,
-					offset,
-				)
-			},
-			func(ctx context.Context) (int64, error) {
-				return db.FetchValue[int64](ctx, "SELECT COUNT(*) FROM "+table+" WHERE country = $1", "TR")
-			},
-		)
+	order, err := page.Sortable[string]{"grade": "grade"}.OrderBy([]page.Key[string]{{Name: "grade", Desc: true}}, "id")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	query := "SELECT id, grade, jsonb_build_object('country', country) AS meta, count(*) OVER () AS total " +
+		"FROM " + table + " WHERE country = @country ORDER BY " + order + " LIMIT @limit OFFSET @offset"
+
+	fetch := func(number int) (page.Result[pageItem], error) {
+		bounds, err := page.MakeBounds(number, 3)
+		if err != nil {
+			return page.Result[pageItem]{}, err
+		}
+
+		return db.FetchPage[pageItem](ctx, query, pgx.NamedArgs{"country": "TR"}, bounds)
 	}
 
 	seen := make(map[int64]int, 10)
 
-	for number := uint(1); number <= 4; number++ {
-		result, err := fetch(ctx, int(number-1)*3)
+	for number := 1; number <= 4; number++ {
+		result, err := fetch(number)
 		if err != nil {
 			t.Fatalf("page %d: %v", number, err)
-		}
-
-		if result.Total != 10 {
-			t.Fatalf("page %d: total=%v", number, result.Total)
 		}
 
 		want := 3
@@ -98,13 +94,8 @@ func TestPageFetchIntegration(t *testing.T) {
 			want = 1
 		}
 
-		if len(result.List) != want {
-			t.Fatalf(
-				"page %d: rows = %d, want %d",
-				number,
-				len(result.List),
-				want,
-			)
+		if result.Total != 10 || len(result.List) != want {
+			t.Fatalf("page %d: rows = %d, total = %d", number, len(result.List), result.Total)
 		}
 
 		for _, item := range result.List {
@@ -126,17 +117,17 @@ func TestPageFetchIntegration(t *testing.T) {
 		}
 	}
 
-	result, err := fetch(ctx, 24)
+	result, err := fetch(9)
 	if err != nil {
 		t.Fatalf("page past the end: %v", err)
 	}
 
 	if result.List == nil || len(result.List) != 0 || result.Total != 10 {
-		t.Fatalf("result = %+v, want empty last page", result)
+		t.Fatalf("result = %+v, want empty page with total", result)
 	}
 }
 
-func TestPageCountIntegration(t *testing.T) {
+func TestFetchPageTotalIntegration(t *testing.T) {
 	t.Setenv("PGFX_TEST_MAX_CONNS", "1")
 	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
 	defer cleanup()
@@ -148,50 +139,31 @@ func TestPageCountIntegration(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		sql   string
-		arg   int64
 		total int64
 	}{
 		{
 			name:  "filter",
-			sql:   "SELECT id FROM generate_series(1::bigint, 10) AS items(id) WHERE id > $1",
-			arg:   5,
+			sql:   "SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min",
 			total: 5,
 		},
 		{
 			name: "empty",
-			sql:  "SELECT id FROM generate_series(1::bigint, 10) AS items(id) WHERE id > $1",
-			arg:  10,
-		},
-		{
-			name:  "distinct",
-			sql:   "SELECT DISTINCT id % 3 AS id FROM generate_series(1::bigint, 10) AS items(id) WHERE id > $1",
-			arg:   5,
-			total: 3,
+			sql:  "SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min + 5",
 		},
 		{
 			name:  "group",
-			sql:   "SELECT id % 3 AS id FROM generate_series(1::bigint, 10) AS items(id) GROUP BY id % 3 HAVING count(*) > $1",
-			arg:   3,
-			total: 1,
+			sql:   "SELECT id % 3 AS id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min GROUP BY id % 3",
+			total: 3,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, number := range []uint{1, 20} {
-				result, err := page.Fetch(
-					ctx,
-					func(ctx context.Context) ([]item, error) {
-						return db.FetchRows[item](
-							ctx,
-							tc.sql+" ORDER BY id LIMIT $2 OFFSET $3",
-							tc.arg,
-							2,
-							int(number-1)*2,
-						)
-					},
-					func(ctx context.Context) (int64, error) {
-						return db.FetchValue[int64](ctx, "SELECT COUNT(*) FROM ("+tc.sql+") AS counted", tc.arg)
-					},
-				)
+			for _, number := range []int{1, 20} {
+				bounds, err := page.MakeBounds(number, 2)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				result, err := db.FetchPage[item](ctx, tc.sql+" ORDER BY id LIMIT @limit OFFSET @offset", pgx.NamedArgs{"min": 5}, bounds)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -208,37 +180,18 @@ func TestPageCountIntegration(t *testing.T) {
 		})
 	}
 
-	err := db.Transaction(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx *pgfx.Tx) error {
-		result, err := page.Fetch(
-			ctx,
-			func(ctx context.Context) ([]item, error) {
-				return tx.FetchRows[item](
-					ctx,
-					"SELECT id FROM generate_series(1::bigint, 10) AS items(id) ORDER BY id LIMIT $1 OFFSET $2",
-					3,
-					3,
-				)
-			},
-			func(ctx context.Context) (int64, error) {
-				return tx.FetchValue[int64](ctx, "SELECT COUNT(*) FROM generate_series(1, 10)")
-			},
-		)
-		if err != nil {
-			return err
-		}
-
-		if result.Total != 10 || len(result.List) != 3 || result.List[0].ID != 4 {
-			t.Fatalf("transaction result: %+v", result)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	_, err := db.FetchPage[item](
+		ctx,
+		"SELECT id FROM generate_series(1::bigint, 3) AS items(id) LIMIT @limit OFFSET @offset",
+		nil,
+		page.Bounds{Limit: 2},
+	)
+	if err == nil || !strings.Contains(err.Error(), "total") {
+		t.Fatalf("missing total column: %v", err)
 	}
 }
 
-func TestPageSortIntegration(t *testing.T) {
+func TestFetchPageSortIntegration(t *testing.T) {
 	t.Setenv("PGFX_TEST_MAX_CONNS", "1")
 	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
 	defer cleanup()
@@ -247,46 +200,41 @@ func TestPageSortIntegration(t *testing.T) {
 		ID    int64  `db:"id"`
 		Score *int64 `db:"score"`
 	}
+
 	const sql = "SELECT id, CASE WHEN id % 5 = 0 THEN NULL ELSE id % 3 END AS score FROM generate_series(1::bigint, 30) AS items(id)"
 
 	for _, tc := range []struct {
 		name string
-		sql  string
+		expr string
+		desc bool
 	}{
-		{name: "ascending", sql: "score ASC, id ASC"},
-		{name: "descending", sql: "score DESC, id ASC"},
-		{
-			name: "nulls_first",
-			sql:  "score ASC NULLS FIRST, id ASC",
-		},
-		{
-			name: "nulls_last",
-			sql:  "score DESC NULLS LAST, id ASC",
-		},
+		{name: "ascending", expr: "score"},
+		{name: "descending", expr: "score", desc: true},
+		{name: "nulls_first", expr: "(score IS NOT NULL), score"},
+		{name: "nulls_last", expr: "(score IS NULL), score", desc: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := db.FetchRows[item](ctx, sql+" ORDER BY "+tc.sql)
+			order, err := page.Sortable[string]{"score": tc.expr}.OrderBy([]page.Key[string]{{Name: "score", Desc: tc.desc}}, "id")
 			if err != nil {
 				t.Fatal(err)
 			}
 
+			want, err := db.FetchRows[item](ctx, "SELECT id, score FROM ("+sql+") AS items ORDER BY "+order)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			query := "SELECT id, score, count(*) OVER () AS total FROM (" + sql + ") AS items ORDER BY " + order + " LIMIT @limit OFFSET @offset"
+
 			var rows []item
 
-			for number := uint(1); number <= 5; number++ {
-				result, err := page.Fetch(
-					ctx,
-					func(ctx context.Context) ([]item, error) {
-						return db.FetchRows[item](
-							ctx,
-							sql+" ORDER BY "+tc.sql+" LIMIT $1 OFFSET $2",
-							7,
-							int(number-1)*7,
-						)
-					},
-					func(ctx context.Context) (int64, error) {
-						return db.FetchValue[int64](ctx, "SELECT COUNT(*) FROM generate_series(1, 30)")
-					},
-				)
+			for number := 1; number <= 5; number++ {
+				bounds, err := page.MakeBounds(number, 7)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				result, err := db.FetchPage[item](ctx, query, nil, bounds)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -305,85 +253,33 @@ func TestPageSortIntegration(t *testing.T) {
 	}
 }
 
-func TestPageParallelPostgres(t *testing.T) {
-	t.Setenv("PGFX_TEST_MAX_CONNS", "2")
-	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
+func TestTxFetchPageIntegration(t *testing.T) {
+	t.Setenv("PGFX_TEST_MAX_CONNS", "1")
+	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
 	defer cleanup()
 
 	type item struct {
 		ID int64 `db:"id"`
 	}
 
-	listReady, countReady := make(chan struct{}), make(chan struct{})
-	var listPID, countPID uint32
+	err := db.Transaction(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx *pgfx.Tx) error {
+		result, err := tx.FetchPage[item](
+			ctx,
+			"SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) ORDER BY id LIMIT @limit OFFSET @offset",
+			nil,
+			page.Bounds{Limit: 3, Offset: 3},
+		)
+		if err != nil {
+			return err
+		}
 
-	result, err := page.Fetch(
-		ctx,
-		func(ctx context.Context) ([]item, error) {
-			conn, err := db.Acquire(ctx)
-			if err != nil {
-				return nil, err
-			}
-			defer conn.Release()
+		if result.Total != 10 || len(result.List) != 3 || result.List[0].ID != 4 {
+			t.Fatalf("transaction result: %+v", result)
+		}
 
-			listPID = conn.Conn().PgConn().PID()
-			close(listReady)
-
-			select {
-			case <-countReady:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-
-			rows, err := conn.Query(
-				ctx,
-				"SELECT id FROM generate_series(1::bigint, 10) AS items(id) WHERE id > $1 ORDER BY id LIMIT $2 OFFSET $3",
-				5,
-				2,
-				1,
-			)
-			if err != nil {
-				return nil, err
-			}
-
-			return pgx.CollectRows(rows, pgx.RowToStructByNameLax[item])
-		},
-		func(ctx context.Context) (int64, error) {
-			conn, err := db.Acquire(ctx)
-			if err != nil {
-				return 0, err
-			}
-			defer conn.Release()
-
-			countPID = conn.Conn().PgConn().PID()
-			close(countReady)
-
-			select {
-			case <-listReady:
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			}
-
-			var total int64
-
-			if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM generate_series(1, 10) AS items(id) WHERE id >= $1", 6).Scan(&total); err != nil {
-				return 0, err
-			}
-
-			return total, nil
-		},
-		page.WithParallel(),
-	)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if listPID == countPID || result.Total != 5 || len(result.List) != 2 || result.List[0].ID != 7 || result.List[1].ID != 8 {
-		t.Fatalf(
-			"result=%+v pids=%d,%d",
-			result,
-			listPID,
-			countPID,
-		)
 	}
 }

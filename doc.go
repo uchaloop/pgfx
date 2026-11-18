@@ -92,15 +92,11 @@ FetchRow continues to require exactly one row.
 
 # Pagination
 
-[github.com/uchaloop/pgfx/page.MakePager] configures numbered pages once.
-Its Pager calculates bounds and reads list/count in one read-only REPEATABLE READ
-transaction, using db-tag row mapping. SQL, matching filters and safe ordering
-remain the application's responsibility.
-
-[github.com/uchaloop/pgfx/page.Fetch] combines caller-owned callbacks without
-calculating bounds or creating a transaction. Its parallel option requires
-independent resources and does not guarantee a shared snapshot.
-See package [github.com/uchaloop/pgfx/page] for contracts and examples.
+[DB.FetchPage] and [Tx.FetchPage] read one numbered page and the number of
+rows the query matches in a single statement. The query binds @limit and
+@offset and ends with a total column, usually count(*) OVER () AS total.
+Package [github.com/uchaloop/pgfx/page] converts a page number and size into
+bounds and builds the ORDER BY list from a whitelist of SQL expressions.
 
 # Read fallback
 

@@ -52,12 +52,11 @@ jobs:
           PGFX_PAGE_PLAN_DIR: ${{ runner.temp }}/page-plans
         run: |
           go test -count=1 -tags=integration -timeout=5m -run '^TestPagePlans$' -json . | tee "$PGFX_PAGE_PLAN_DIR/results.jsonl"
-          jq -se 'any(.[]; .Action == "pass" and .Test == "TestPagePlans") and ([.[] | select(.Action == "pass" and (.Test // "" | test("^TestPagePlans/[^/]+/[^/]+$"))) | .Test] | sort == ["TestPagePlans/parallel/deep", "TestPagePlans/parallel/empty", "TestPagePlans/parallel/first", "TestPagePlans/sequential/deep", "TestPagePlans/sequential/empty", "TestPagePlans/sequential/first"])' "$PGFX_PAGE_PLAN_DIR/results.jsonl"
-          for mode in sequential parallel; do
-            for name in first deep empty; do
-              for statement in rows count; do
-                test -s "$PGFX_PAGE_PLAN_DIR/page-$mode-$name-$statement.json"
-              done
+          jq -se 'any(.[]; .Action == "pass" and .Test == "TestPagePlans") and ([.[] | select(.Action == "pass" and (.Test // "" | test("^TestPagePlans/[^/]+/[^/]+$"))) | .Test] | sort == ["TestPagePlans/split/deep", "TestPagePlans/split/empty", "TestPagePlans/split/first", "TestPagePlans/window/deep", "TestPagePlans/window/empty", "TestPagePlans/window/first"])' "$PGFX_PAGE_PLAN_DIR/results.jsonl"
+          for name in first deep empty; do
+            test -s "$PGFX_PAGE_PLAN_DIR/page-window-$name-page.json"
+            for statement in rows count; do
+              test -s "$PGFX_PAGE_PLAN_DIR/page-split-$name-$statement.json"
             done
           done
 

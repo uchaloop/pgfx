@@ -3,8 +3,11 @@ package pgfx_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/uchaloop/pgfx/page"
 	pgfxtest "github.com/uchaloop/pgfx/test"
 )
 
@@ -98,4 +101,52 @@ func ExampleDB_FetchValuesInto() {
 		fmt.Println(values)
 	}
 	// Prints [1], then [2]. Each result is consumed before storage is reused.
+}
+
+func ExampleDB_FetchPage() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db, err := pgfxtest.MakeDB(ctx)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	type item struct {
+		ID int64 `db:"id"`
+	}
+
+	// The query filters once; count(*) OVER () counts every matching row.
+	const query = `
+		SELECT id, count(*) OVER () AS total
+		FROM generate_series(1::bigint, 10) AS items(id)
+		WHERE id > @min
+		ORDER BY {order}
+		LIMIT @limit OFFSET @offset`
+
+	sortable := page.Sortable[string]{"id": "id"}
+
+	order, err := sortable.OrderBy([]page.Key[string]{{Name: "id", Desc: true}}, "id")
+	if err != nil {
+		panic(err)
+	}
+
+	bounds, err := page.MakeBounds(2, 2)
+	if err != nil {
+		panic(err)
+	}
+
+	result, err := db.FetchPage[item](
+		ctx,
+		strings.Replace(query, "{order}", order, 1),
+		pgx.NamedArgs{"min": 5},
+		bounds,
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(result.List, result.Total)
+	// Prints [{8} {7}] 5.
 }
