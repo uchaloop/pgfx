@@ -7,6 +7,26 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-18
+
+### Added
+
+- `DB.FetchPage` and `Tx.FetchPage` read one page and the matching row count in
+  a single statement: the query binds `@limit`/`@offset` through `pgx.NamedArgs`
+  and ends with a `total` column such as `count(*) OVER () AS total`. A page past
+  the end of a non-empty result re-reads the total; the list is never nil.
+- `page.MakeBounds` converts a page number and size into LIMIT/OFFSET and
+  rejects values below 1 or offset overflow with `page.ErrBounds`.
+- `page.Sortable[K].OrderBy` builds an ORDER BY list from whitelisted SQL
+  expressions with a required tie column; unknown or repeated keys return
+  `page.ErrSort`. `K` may be an application enum type.
+
+### Removed
+
+- `page.MakePager`, `Pager`, `page.Config`, `page.Params`, `page.ErrParams`,
+  `page.Fetch`, `page.Option` and `page.WithParallel`. Package `page` now depends
+  only on the standard library.
+
 ## [0.12.0] - 2026-11-17
 
 This release contains breaking API changes.
@@ -285,7 +305,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/uchaloop/pgfx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/uchaloop/pgfx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/uchaloop/pgfx/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/uchaloop/pgfx/compare/v0.9.1...v0.10.0

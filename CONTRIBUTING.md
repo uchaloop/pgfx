@@ -59,18 +59,11 @@ interpret a skipped test as a verified database scenario.
 
 Tests using `pgfx/test` share the same connection variables and manage their own
 fixtures. For use in your application, see [Testing](README.md#testing).
-The integration suite also executes the optional-row, buffer-reuse and
-transaction-value examples through `TestDocumentationExamples`. The four
-[pagination examples](page/example_test.go) run through `TestPageExamples` in
-the page package. They use `generate_series` and need no application tables.
-Pager.Fetch, sequential and transaction examples use one pooled connection; the parallel
-example allows two.
-
-To run only the pagination examples with the same environment:
-
-```sh
-go test -count=1 -race -tags=integration -run '^TestPageExamples$' -v ./page
-```
+The integration suite also executes the optional-row, buffer-reuse,
+transaction-value and page examples through `TestDocumentationExamples`.
+They use `generate_series` and need no application tables. The
+[page package examples](page/example_test.go) need no database and run with
+plain `go test`.
 
 ## Additional checks
 
@@ -108,18 +101,21 @@ match the test helper. `PGFX_PAGE_TEST_HOST` is required; there is no fallback
 to `PGFX_TEST_HOST`. `PGFX_PAGE_PLAN_DIR` must already exist. These credentials
 and disabled TLS are only for the disposable lab.
 
-Expected: six passing leaf subtests (`sequential/first`, `sequential/deep`,
-`sequential/empty`, `parallel/first`, `parallel/deep`, `parallel/empty`) and twelve
-`page-{sequential,parallel}-{first,deep,empty}-{rows,count}.json` EXPLAIN artifacts.
+The test compares two ways to read a page. `window` is one `FetchPage`
+statement with `count(*) OVER ()`; `split` is `FetchRows` followed by a separate
+`COUNT(*)`. Expected: six passing leaf subtests (`window/first`, `window/deep`,
+`window/empty`, `split/first`, `split/deep`, `split/empty`) and nine EXPLAIN
+artifacts: `page-window-{first,deep,empty}-page.json` and
+`page-split-{first,deep,empty}-{rows,count}.json`.
 With a limit of 20 and ID ascending, the cases cover offset 0, offset 1800000,
 and offset 2000020 (past the end). Each verifies the returned list and
-Total=2000000; the empty page must still return the total. Both application-owned
-statements are explained. Plans are observations, not requirements for a
-particular scan type.
+Total=2000000; the empty page must still return the total. Every statement is
+explained. Plans are observations, not requirements for a particular scan type.
 
-The test reports median page.Fetch latency after warmup, including the row and
-count callbacks, queries, network and decoding in each mode. Parallel calls
-require pool capacity for concurrent queries; they do not guarantee a speedup.
+The test reports the median latency of one page with its total after warmup,
+including queries, network and decoding in each mode. The window statement
+evaluates every matching row before LIMIT applies, and a page past the end runs
+it twice; compare both modes before choosing one for a large table.
 Run performance checks without `-race`;
 use the separate integration command for race checks. Measurements are not
 cold-cache results or performance guarantees. Record PostgreSQL version,

@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uchaloop/pgfx/page"
 )
 
 // DB extends a PostgreSQL pool with typed queries.
@@ -139,5 +140,27 @@ func (d *DB) FetchOptionalRow[T any](ctx context.Context, sql string, args ...an
 		d.Pool,
 		sql,
 		args...,
+	)
+}
+
+// FetchPage runs one page query and returns its rows with the number of rows
+// the query matches across all pages. Rows map to T as in FetchRows.
+//
+// The query must reference @limit and @offset and end with a bigint column
+// named total, usually count(*) OVER () AS total. FetchPage binds b to @limit
+// and @offset; args must not set them. When the page lies past the end of a
+// non-empty result, FetchPage runs the query once more with offset 0 to read
+// the total. List is non-nil on success.
+//
+// The window total is evaluated before DISTINCT, so the query must not use
+// SELECT DISTINCT; use GROUP BY instead. Invalid bounds return page.ErrBounds
+// before the query runs.
+func (d *DB) FetchPage[T any](ctx context.Context, sql string, args pgx.NamedArgs, b page.Bounds) (page.Result[T], error) {
+	return collectPage[T](
+		ctx,
+		d.Pool,
+		sql,
+		args,
+		b,
 	)
 }

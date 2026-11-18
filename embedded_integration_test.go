@@ -3,7 +3,6 @@
 package pgfx_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -28,20 +27,12 @@ func TestEmbeddedStructPaginationIntegration(t *testing.T) {
 		t.Fatalf("decode control: %v, %v", control, err)
 	}
 
-	for _, offset := range []int{0, 1} {
-		result, err := page.Fetch(
+	for _, offset := range []int64{0, 1} {
+		result, err := db.FetchPage[row](
 			ctx,
-			func(ctx context.Context) ([]row, error) {
-				return db.FetchRows[row](
-					ctx,
-					sql+" ORDER BY x, id LIMIT $1 OFFSET $2",
-					1,
-					offset,
-				)
-			},
-			func(ctx context.Context) (int64, error) {
-				return db.FetchValue[int64](ctx, "SELECT COUNT(*) FROM ("+sql+") AS counted")
-			},
+			"SELECT id, x, count(*) OVER () AS total FROM ("+sql+") AS items ORDER BY x, id LIMIT @limit OFFSET @offset",
+			nil,
+			page.Bounds{Limit: 1, Offset: offset},
 		)
 		if err != nil {
 			t.Fatal(err)

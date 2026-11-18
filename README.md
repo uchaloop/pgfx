@@ -428,102 +428,117 @@ requires exactly one row and returns `pgx.ErrNoRows` for an empty result.
 
 ## Pagination
 
-| API | Use when |
-| --- | --- |
-| `page.MakePager` and `Pager.Fetch` | Numbered pages need normalized limits and one database snapshot. |
-| `page.Fetch` | The caller supplies pagination and manages the callbacks' resources. |
+`DB.FetchPage` and `Tx.FetchPage` read one numbered page and the number of rows
+the query matches, in a single statement. Package `page` holds the request-side
+helpers and depends only on the standard library.
 
-Both return `page.Result[T]` with `List []T` and `Total int64`.
+| API | Purpose |
+| --- | --- |
+| `page.MakeBounds(number, size)` | Converts a 1-based page number and size into `page.Bounds` (LIMIT/OFFSET). |
+| `page.Sortable[K].OrderBy(keys, tie)` | Builds an ORDER BY list from whitelisted SQL expressions. |
+| `FetchPage[T](ctx, sql, args, bounds)` | Runs the page query and returns `page.Result[T]` with `List []T` and `Total int64`. |
+
 Response serialization belongs to the application.
 
-### Numbered pages with a consistent snapshot
+### Page query
 
-`Pager.Fetch` calculates `LIMIT/OFFSET` from `page.Params{Page, Limit}` and
-runs list, then count, in one read-only `REPEATABLE READ` transaction. Both
-callbacks must use the supplied `*pgfx.Tx` and context. Rows retain `db`-tag
-mapping; JSON tags are unrelated to database decoding.
+The page query is plain SQL with three requirements:
 
-`page.MakePager(page.Config{})` uses minimum/default/maximum limits of 1/10/100.
-Each zero configuration field uses its default. The constructor rejects negative
-limits and requires minimum <= default <= maximum. A page below 1 becomes 1;
-a nonpositive requested limit uses the default; a positive limit is clamped to
-the configured range. `pager.Bounds(params)` performs the same calculation
-without accessing the database and rejects offset overflow with `page.ErrParams`.
+- It uses `@limit` and `@offset`; `FetchPage` binds them from the bounds. Pass
+  other values in `pgx.NamedArgs`, which must not set `limit` or `offset`.
+- Its last column is a `bigint` named `total`, normally `count(*) OVER () AS total`.
+  The column is not mapped to `T`; other columns map as in `FetchRows`.
+- It does not use `SELECT DISTINCT`: the window counts rows before DISTINCT.
+  Use `GROUP BY` instead; the window then counts groups.
 
-The following fragment assumes `ctx`, an initialized `db`, an `orders` table,
-and an `Order` type with an `ID` field tagged `db:"id"`. Import `context`,
-`github.com/uchaloop/pgfx` and `github.com/uchaloop/pgfx/page`; the enclosing
-function returns `(page.Result[Order], error)`. Construct the pager once and
-reuse it across requests.
+The following fragment assumes `ctx`, an initialized `db`, an `orders` table, an
+`Order` type with `db` tags, and validated request values `number`, `size`,
+`keys` and `status`. Import `strings`, `github.com/jackc/pgx/v5` and
+`github.com/uchaloop/pgfx/page`; the enclosing function returns
+`(page.Result[Order], error)`.
 
 ```go
-pager, err := page.MakePager(page.Config{MinLimit: 1, DefaultLimit: 20, MaxLimit: 100})
+var orderSortable = page.Sortable[string]{
+    "createdAt": "o.created_at",
+    "id":        "o.id",
+}
+
+const ordersQuery = `
+    SELECT 
+        o.id, 
+        o.status, 
+        o.created_at, 
+        count(*) OVER () AS total
+    FROM orders o
+    WHERE o.status = @status
+    ORDER BY {order}
+    LIMIT @limit OFFSET @offset
+`
+
+order, err := orderSortable.OrderBy(keys, "o.id")
 if err != nil {
     return page.Result[Order]{}, err
 }
 
-return pager.Fetch(
+bounds, err := page.MakeBounds(number, size)
+if err != nil {
+    return page.Result[Order]{}, err
+}
+
+return db.FetchPage[Order](
     ctx,
-    db,
-    page.Params{Page: 2, Limit: 20},
-    func(ctx context.Context, tx *pgfx.Tx, bounds page.Bounds) ([]Order, error) {
-        return tx.FetchRows[Order](
-            ctx,
-            "SELECT id FROM orders ORDER BY id LIMIT $1 OFFSET $2",
-            bounds.Limit,
-            bounds.Offset,
-        )
-    },
-    func(ctx context.Context, tx *pgfx.Tx) (int64, error) {
-        return tx.FetchValue[int64](ctx, "SELECT COUNT(*) FROM orders")
-    },
+    strings.Replace(ordersQuery, "{order}", order, 1),
+    pgx.NamedArgs{"status": status},
+    bounds,
 )
 ```
 
-Count runs
-even for an empty page; a successful empty list is non-nil. Errors from callbacks,
-context cancellation, begin or commit return a zero result. A list error skips
-count. The helper owns the transaction, but does not close the borrowed DB.
-Callbacks must not commit or roll back the transaction themselves.
+`{order}` is only a marker in this fragment; the ORDER BY list is the one part
+of the query built at run time. See the [complete example](query_example_test.go).
 
-### Independent callbacks
+`List` is non-nil on success, and an empty page still carries the total. When a
+page lies past the end of a non-empty result, `FetchPage` runs the query once
+more with offset 0 to read the total. Any error returns a zero result.
+`DB.FetchPage` does not open a transaction; `Tx.FetchPage` runs in the caller's.
 
-`page.Fetch` does not calculate bounds or open a transaction. It calls list,
-then count, including for empty lists. As with `Pager.Fetch`, callback errors
-return a zero result and a successful nil list becomes non-nil.
+### Page number and size
 
-`page.WithParallel()` runs callbacks concurrently using their supplied contexts.
-The first recorded error cancels the sibling; Fetch waits for both to finish.
-Callbacks must cooperate with cancellation. Never share a transaction or
-connection between parallel callbacks. Pool-backed callbacks use separate
-connections and do not guarantee a common snapshot or faster execution.
-The context and callbacks must be non-nil.
+`page.MakeBounds` applies no defaults and no maximum. Validate both values before
+calling it, including an upper limit on the size: the size bounds the rows a
+client can request. It returns `page.ErrBounds` for values below 1 or an offset
+that overflows `int64`. `FetchPage` returns `page.ErrBounds` for a limit below 1
+or a negative offset before the query runs.
 
-See the [complete examples](page/example_test.go) for sequential, parallel and
-caller-owned transaction variants, plus the main `Pager.Fetch` scenario.
-They use `pgfx/test` and `generate_series`, without application tables; see
-[PostgreSQL integration tests](CONTRIBUTING.md#postgresql-integration-tests)
-for setup and execution.
+### Sorting
 
-For either API, keep list/count filters identical and exclude LIMIT/OFFSET from
-the count. Preserve DISTINCT, grouping and join semantics. SQL and filter values
-belong to the application: parameterize values and whitelist client-controlled
-sort columns and directions. Never interpolate raw client sort text.
+`page.Sortable[K]` maps request sort keys to trusted SQL expressions; only these
+expressions reach the query. `K` can be `string` or the application's own enum
+type, such as `type SortField string`, so the compiler checks the whitelist
+keys. `OrderBy` returns an error matching `page.ErrSort` for an unknown or
+repeated key.
 
-### Sorting and indexes
+`tie` must be a unique column, such as the primary key: it keeps the order stable
+across pages. It is appended with the direction of the last key, or `ASC` when
+there are no keys, and is skipped when a key already maps to it. For example,
+keys `[{createdAt, Desc: true}]` with tie `o.id` produce
+`o.created_at DESC, o.id DESC`, which an index on `(created_at DESC, id DESC)`
+serves.
 
-Use a deterministic order with a unique tie-breaker, including for results
-multiplied by joins. For `ORDER BY score DESC, id ASC`, a matching index is
-`(score DESC, id ASC)`. Default NULL placement follows PostgreSQL; custom NULL
-placement may require another index or a sort. Expose only sorts that your
-workload can support. Indexes do not make arbitrary joins, filters or expressions
-cheap.
+NULL placement follows PostgreSQL: last for `ASC`, first for `DESC`. The
+direction is appended to the mapped expression, so an expression must not end
+with `NULLS FIRST` or `NULLS LAST`. To keep NULLs last in both directions, map
+the key to `(expr IS NULL), expr`; use `IS NOT NULL` to keep them first. A
+computed expression references source columns, not output aliases.
 
-LIMIT/OFFSET supports direct page navigation, but deep offsets make PostgreSQL
-walk skipped rows, and an exact count processes the complete base result. The
-returned-row limit does not bound database work. See
-[pagination-lab](CONTRIBUTING.md#pagination-lab) for sequential and parallel row
-and count plan checks, [pagination examples](page/example_test.go).
+### Cost
+
+`count(*) OVER ()` evaluates every matching row before LIMIT applies, so the
+cost follows the size of the filtered result rather than the page size, and a
+page past the end runs the query twice. Deep offsets also make PostgreSQL walk
+the skipped rows. For large results, read the rows with `FetchRows` and the
+total with a separate `COUNT(*)`, or drop the total. Expose only sorts that an
+index can serve. See [pagination-lab](CONTRIBUTING.md#pagination-lab) to compare
+both approaches on your data.
 
 ## Read fallback
 
@@ -574,10 +589,9 @@ Any error returns the zero result. If both reads fail, the returned error wraps
 both causes for `errors.Is` and `errors.As`; it labels replica and master failures.
 Errors may contain database details: handle logging at the application boundary.
 
-For pagination, put the **entire** `pager.Fetch(ctx, db, params, list, count)` call
-inside the callback. A count failure discards the replica list and repeats both
-queries in a new master snapshot. Never fall back separately inside list/count
-or transfer an existing Tx. See the [integration example](fallback_integration_test.go).
+For pagination, call `FetchPage` with the callback's `db`: the rows and the
+total come from one statement, so a fallback repeats both together. Never
+transfer an existing Tx into the callback.
 
 ## Transactions
 
@@ -608,8 +622,6 @@ provide typed pgx savepoints. Native `DB.Begin` and `DB.BeginTx` return `pgx.Tx`
 See the [transaction examples](example_test.go) and the
 [complete TransactionValue example](transaction_value_example_test.go).
 
-See [Pagination](#pagination) for transaction ownership in pagination helpers.
-
 ## Errors and diagnostics
 
 - `FetchRow` and `FetchValue` return `pgx.ErrNoRows` or `pgx.ErrTooManyRows` unless exactly
@@ -617,9 +629,8 @@ See [Pagination](#pagination) for transaction ownership in pagination helpers.
   sentinel errors and `errors.As` for PostgreSQL errors.
 - For Fx startup and shutdown requirements, see
   [Fx lifecycle and named connections](#fx-lifecycle-and-named-connections).
-- Use `errors.Is(err, page.ErrParams)` for invalid pager configuration or offset
-  overflow. Validate application filters and allowed sort fields separately;
-  neither pagination API builds SQL.
+- Use `errors.Is(err, page.ErrBounds)` for an invalid page number or size and
+  `errors.Is(err, page.ErrSort)` for a sort key outside the whitelist.
 - Pass a context with an appropriate deadline and handle the returned error.
   Avoid logging credentials, raw filter arguments or SQL containing secrets.
 
@@ -696,7 +707,7 @@ local PostgreSQL setup and [test package GoDoc](test/db.go) for the contract.
 
 - [Package API](https://pkg.go.dev/github.com/uchaloop/pgfx) and [page API](https://pkg.go.dev/github.com/uchaloop/pgfx/page) for indexed releases
 - Current source documentation: [pgfx](doc.go), [page](page/doc.go), [test](test/db.go)
-- Examples: [standalone](examples/quickstart/main.go), [Fx](examples/fx/main.go), [fetches and transactions](example_test.go), [pagination](page/example_test.go)
+- Examples: [standalone](examples/quickstart/main.go), [Fx](examples/fx/main.go), [fetches and transactions](example_test.go), [pagination](query_example_test.go), [page helpers](page/example_test.go)
 - More examples: [optional rows and buffers](query_example_test.go), [transaction values](transaction_value_example_test.go), [error helpers and LIKE](helpers_example_test.go)
 - [Changelog](CHANGELOG.md)
 - [Contributing and PostgreSQL checks](CONTRIBUTING.md)
