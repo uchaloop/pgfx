@@ -36,8 +36,7 @@ func TestReadFallbackUnavailableReplica(t *testing.T) {
 	calls := 0
 	value, err := pgfx.ReadWithFallback(
 		t.Context(),
-		replica,
-		master,
+		[]*pgfx.DB{replica, master},
 		func(ctx context.Context, db *pgfx.DB) (int, error) {
 			calls++
 			return db.FetchValue[int](ctx, "SELECT 42")
@@ -54,8 +53,7 @@ func TestReadFallbackUnavailableReplica(t *testing.T) {
 	calls = 0
 	_, err = pgfx.ReadWithFallback(
 		t.Context(),
-		master,
-		replica,
+		[]*pgfx.DB{master, replica},
 		func(ctx context.Context, db *pgfx.DB) (int, error) {
 			calls++
 			return db.FetchValue[int](ctx, "SELECT 1 WHERE false")

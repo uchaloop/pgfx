@@ -441,3 +441,68 @@ func TestConfigEnvPrefix(t *testing.T) {
 		t.Fatalf("EnvPrefix() = %q, want POSTGRES_", got)
 	}
 }
+
+func TestPoolConfigTimeouts(t *testing.T) {
+	cfg := Config{
+		Host:     "127.0.0.1:5432",
+		Database: "app",
+		TLS:      TLSConfig{Mode: "disable"},
+		Timeouts: TimeoutConfig{Statement: 1500 * time.Millisecond, LockWait: 2 * time.Second},
+	}
+
+	poolCfg, err := cfg.poolConfig(makeOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params := poolCfg.ConnConfig.RuntimeParams
+	if params["statement_timeout"] != "1500" || params["lock_timeout"] != "2000" {
+		t.Fatalf("runtime params = %v", params)
+	}
+
+	cfg.Timeouts = TimeoutConfig{}
+
+	poolCfg, err = cfg.poolConfig(makeOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := poolCfg.ConnConfig.RuntimeParams["statement_timeout"]; ok {
+		t.Fatal("zero statement timeout was sent")
+	}
+
+	if _, ok := poolCfg.ConnConfig.RuntimeParams["lock_timeout"]; ok {
+		t.Fatal("zero lock timeout was sent")
+	}
+
+	cfg.Timeouts = TimeoutConfig{Statement: time.Second}
+
+	poolCfg, err = cfg.poolConfig(makeOptions(WithRuntimeParam("statement_timeout", "9")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := poolCfg.ConnConfig.RuntimeParams["statement_timeout"]; got != "9" {
+		t.Fatalf("WithRuntimeParam lost to the config: %q", got)
+	}
+}
+
+func TestValidateTimeouts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		timeouts TimeoutConfig
+		want     string
+	}{
+		{name: "sub-millisecond statement", timeouts: TimeoutConfig{Statement: 500 * time.Microsecond}, want: "timeouts.statement"},
+		{name: "negative lock wait", timeouts: TimeoutConfig{LockWait: -1}, want: "timeouts.lock_wait"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{Host: "127.0.0.1:5432", Database: "app", Timeouts: tc.timeouts}
+
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

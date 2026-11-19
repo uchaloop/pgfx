@@ -21,6 +21,9 @@ type options struct {
 	tracer              pgx.QueryTracer
 	queryMetrics        QueryMetricFunc
 	isSQLInQueryMetrics bool
+	isStartupPing       bool
+	name                string
+	state               *connState
 	poolOptions         []func(*pgxpool.Config)
 }
 
@@ -43,8 +46,8 @@ func makeOptions(opts ...Option) *options {
 }
 
 // buildTracer assembles the pool's pgx.QueryTracer from whatever is enabled: the
-// otelpgx span tracer (WithTrace), a custom tracer (WithTracer), and the
-// metrics callback (WithQueryMetrics). Nothing enabled -> nil (no tracer). Two or
+// otelpgx span tracer (WithTrace), a custom tracer (WithTracer), the metrics
+// callback (WithQueryMetrics) and the breaker's state tracer (Config.Breaker). Nothing enabled -> nil (no tracer). Two or
 // more are composed with multitracer.
 func (o *options) buildTracer() pgx.QueryTracer {
 	var tracers []pgx.QueryTracer
@@ -61,7 +64,12 @@ func (o *options) buildTracer() pgx.QueryTracer {
 		tracers = append(tracers, metricsTracer{
 			fn:            o.queryMetrics,
 			isSQLIncluded: o.isSQLInQueryMetrics,
+			connection:    o.name,
 		})
+	}
+
+	if o.state != nil && o.state.breaker != nil {
+		tracers = append(tracers, stateTracer{state: o.state})
 	}
 
 	switch len(tracers) {
@@ -174,6 +182,15 @@ func WithTLS(tlsConfig *tls.Config) Option {
 	}
 }
 
+// WithStartupPing makes startup verify the server: MakeDB pings before it
+// returns and closes the pool on failure; MakeModule and MakeModuleFor ping in
+// OnStart and fail the start. Without it, startup only validates configuration:
+// it does not wait for the server and does not fail because the server is
+// unavailable. Pools with MinConns may still dial in the background.
+func WithStartupPing() Option {
+	return func(o *options) { o.isStartupPing = true }
+}
+
 // WithDefaultQueryExecMode sets the default pgx.QueryExecMode.
 func WithDefaultQueryExecMode(mode pgx.QueryExecMode) Option {
 	return withConnConfig(func(cfg *pgx.ConnConfig) { cfg.DefaultQueryExecMode = mode })
@@ -187,13 +204,7 @@ func WithStatementCacheCapacity(capacity int) Option {
 // WithRuntimeParam adds a single pgx.ConnConfig.RuntimeParams value (SET key =
 // value on connect).
 func WithRuntimeParam(key, value string) Option {
-	return withConnConfig(func(cfg *pgx.ConnConfig) {
-		if cfg.RuntimeParams == nil {
-			cfg.RuntimeParams = make(map[string]string)
-		}
-
-		cfg.RuntimeParams[key] = value
-	})
+	return withConnConfig(func(cfg *pgx.ConnConfig) { setRuntimeParam(cfg, key, value) })
 }
 
 func withConnConfig(mutate func(*pgx.ConnConfig)) Option {

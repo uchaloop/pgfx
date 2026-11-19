@@ -30,57 +30,6 @@ func TestBuildTracerOptIn(t *testing.T) {
 	}
 }
 
-func TestWithTLSOverridesLibpqTLSAndRemovesFallbacks(t *testing.T) {
-	customTLS := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		ServerName: "database.internal",
-	}
-	cfg := Config{
-		Host:     "database.internal",
-		Database: "app",
-	}
-
-	poolCfg, err := cfg.poolConfig(makeOptions(WithTLS(customTLS)))
-	if err != nil {
-		t.Fatalf("poolConfig: %v", err)
-	}
-
-	if poolCfg.ConnConfig.TLSConfig != customTLS {
-		t.Fatal("WithTLS did not install the provided TLS config")
-	}
-
-	if len(poolCfg.ConnConfig.Fallbacks) != 0 {
-		t.Fatalf(
-			"WithTLS kept %d libpq fallbacks, want none",
-			len(poolCfg.ConnConfig.Fallbacks),
-		)
-	}
-}
-
-func TestWithTLSNilDisablesTLSAndRemovesFallbacks(t *testing.T) {
-	cfg := Config{
-		Host:     "database.internal",
-		Database: "app",
-		TLS:      TLSConfig{Mode: "allow"},
-	}
-
-	poolCfg, err := cfg.poolConfig(makeOptions(WithTLS(nil)))
-	if err != nil {
-		t.Fatalf("poolConfig: %v", err)
-	}
-
-	if poolCfg.ConnConfig.TLSConfig != nil {
-		t.Fatal("WithTLS(nil) did not disable TLS")
-	}
-
-	if len(poolCfg.ConnConfig.Fallbacks) != 0 {
-		t.Fatalf(
-			"WithTLS(nil) kept %d libpq fallbacks, want none",
-			len(poolCfg.ConnConfig.Fallbacks),
-		)
-	}
-}
-
 func TestWithBeforeConnect(t *testing.T) {
 	isCalled := false
 	poolCfg := makeTestPoolConfig(t, WithBeforeConnect(func(
@@ -214,29 +163,41 @@ func makeTestPoolConfig(t *testing.T, opts ...Option) *pgxpool.Config {
 }
 
 func TestTLSOverrideSkipsFileConfiguration(t *testing.T) {
-	for _, isDisabled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "custom", true: "disabled"}[isDisabled], func(t *testing.T) {
-			absentPath := filepath.Join(t.TempDir(), "missing.pem")
-			t.Setenv("PGSSLMODE", "invalid")
-			t.Setenv("PGSSLROOTCERT", absentPath)
-			t.Setenv("PGSSLCERT", absentPath)
-			t.Setenv("PGSSLKEY", absentPath)
-			var custom *tls.Config
-
-			if !isDisabled {
-				custom = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "db.internal"}
-			}
-
+	for _, tc := range []struct {
+		name           string
+		mode           string
+		isDisabled     bool
+		isInvalidFiles bool
+	}{
+		{name: "default mode"},
+		{name: "allow disabled", mode: "allow", isDisabled: true},
+		{name: "invalid custom", mode: "invalid", isInvalidFiles: true},
+		{name: "invalid disabled", mode: "invalid", isDisabled: true, isInvalidFiles: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{
 				Host:     "db.internal",
 				Database: "app",
-				TLS: TLSConfig{
-					Mode:     "invalid",
-					RootCert: absentPath,
-					Cert:     absentPath,
-					Key:      absentPath,
-				},
+				TLS:      TLSConfig{Mode: tc.mode},
 			}
+
+			if tc.isInvalidFiles {
+				absentPath := filepath.Join(t.TempDir(), "missing.pem")
+				t.Setenv("PGSSLMODE", "invalid")
+				t.Setenv("PGSSLROOTCERT", absentPath)
+				t.Setenv("PGSSLCERT", absentPath)
+				t.Setenv("PGSSLKEY", absentPath)
+				cfg.TLS.RootCert = absentPath
+				cfg.TLS.Cert = absentPath
+				cfg.TLS.Key = absentPath
+			}
+
+			var custom *tls.Config
+
+			if !tc.isDisabled {
+				custom = &tls.Config{MinVersion: tls.VersionTLS13, ServerName: "db.internal"}
+			}
+
 			got, err := cfg.poolConfig(makeOptions(WithTLS(custom)))
 			if err != nil {
 				t.Fatal(err)

@@ -23,7 +23,7 @@ func TestFetchPageIntegration(t *testing.T) {
 
 	const table = "pgfx_integration_pages"
 
-	if _, err := db.Exec(ctx, "drop table if exists "+table); err != nil {
+	if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 		t.Fatalf("drop stale table: %v", err)
 	}
 
@@ -31,12 +31,18 @@ func TestFetchPageIntegration(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 
-		_, _ = db.Exec(cleanupCtx, "drop table if exists "+table)
+		_, _ = db.Exec(cleanupCtx, "DROP TABLE IF EXISTS "+table)
 	})
 
 	if _, err := db.Exec(
 		ctx,
-		"create table "+table+" (id bigint primary key, grade text not null, country text not null)",
+		`
+			CREATE TABLE `+table+` (
+				id bigint PRIMARY KEY,
+				grade text NOT NULL,
+				country text NOT NULL
+			)
+		`,
 	); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
@@ -44,15 +50,36 @@ func TestFetchPageIntegration(t *testing.T) {
 	// Ten matching rows sharing three grades, plus one row the filter excludes.
 	if _, err := db.Exec(
 		ctx,
-		"insert into "+table+" (id, grade, country) "+
-			"select i, 'g' || (i % 3), 'TR' from generate_series(1, 10) AS i",
+		`
+			INSERT INTO `+table+` (
+				id,
+				grade,
+				country
+			)
+			SELECT
+				i,
+				'g' || (i % 3),
+				'TR'
+			FROM generate_series(1, 10) AS i
+		`,
 	); err != nil {
 		t.Fatalf("seed rows: %v", err)
 	}
 
 	if _, err := db.Exec(
 		ctx,
-		"insert into "+table+" (id, grade, country) values (99, 'g0', 'DE')",
+		`
+			INSERT INTO `+table+` (
+				id,
+				grade,
+				country
+			)
+			VALUES (
+				99,
+				'g0',
+				'DE'
+			)
+		`,
 	); err != nil {
 		t.Fatalf("seed excluded row: %v", err)
 	}
@@ -68,8 +95,18 @@ func TestFetchPageIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	query := "SELECT id, grade, jsonb_build_object('country', country) AS meta, count(*) OVER () AS total " +
-		"FROM " + table + " WHERE country = @country ORDER BY " + order + " LIMIT @limit OFFSET @offset"
+	query := `
+		SELECT
+			id,
+			grade,
+			jsonb_build_object('country', country) AS meta,
+			count(*) OVER () AS total
+		FROM ` + table + `
+		WHERE country = @country
+		ORDER BY ` + order + `
+		LIMIT @limit
+		OFFSET @offset
+	`
 
 	fetch := func(number int) (page.Result[pageItem], error) {
 		bounds, err := page.MakeBounds(number, 3)
@@ -142,17 +179,36 @@ func TestFetchPageTotalIntegration(t *testing.T) {
 		total int64
 	}{
 		{
-			name:  "filter",
-			sql:   "SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min",
+			name: "filter",
+			sql: `
+				SELECT
+					id,
+					count(*) OVER () AS total
+				FROM generate_series(1::bigint, 10) AS items(id)
+				WHERE id > @min
+			`,
 			total: 5,
 		},
 		{
 			name: "empty",
-			sql:  "SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min + 5",
+			sql: `
+				SELECT
+					id,
+					count(*) OVER () AS total
+				FROM generate_series(1::bigint, 10) AS items(id)
+				WHERE id > @min + 5
+			`,
 		},
 		{
-			name:  "group",
-			sql:   "SELECT id % 3 AS id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) WHERE id > @min GROUP BY id % 3",
+			name: "group",
+			sql: `
+				SELECT
+					id % 3 AS id,
+					count(*) OVER () AS total
+				FROM generate_series(1::bigint, 10) AS items(id)
+				WHERE id > @min
+				GROUP BY id % 3
+			`,
 			total: 3,
 		},
 	} {
@@ -180,9 +236,17 @@ func TestFetchPageTotalIntegration(t *testing.T) {
 		})
 	}
 
+	const query = `
+		SELECT
+			id
+		FROM generate_series(1::bigint, 3) AS items(id)
+		LIMIT @limit
+		OFFSET @offset
+	`
+
 	_, err := db.FetchPage[item](
 		ctx,
-		"SELECT id FROM generate_series(1::bigint, 3) AS items(id) LIMIT @limit OFFSET @offset",
+		query,
 		nil,
 		page.Bounds{Limit: 2},
 	)
@@ -201,7 +265,12 @@ func TestFetchPageSortIntegration(t *testing.T) {
 		Score *int64 `db:"score"`
 	}
 
-	const sql = "SELECT id, CASE WHEN id % 5 = 0 THEN NULL ELSE id % 3 END AS score FROM generate_series(1::bigint, 30) AS items(id)"
+	const sql = `
+		SELECT
+			id,
+			CASE WHEN id % 5 = 0 THEN NULL ELSE id % 3 END AS score
+		FROM generate_series(1::bigint, 30) AS items(id)
+	`
 
 	for _, tc := range []struct {
 		name string
@@ -219,12 +288,27 @@ func TestFetchPageSortIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			want, err := db.FetchRows[item](ctx, "SELECT id, score FROM ("+sql+") AS items ORDER BY "+order)
+			want, err := db.FetchRows[item](ctx, `
+				SELECT
+					id,
+					score
+				FROM (`+sql+`) AS items
+				ORDER BY `+order+`
+			`)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			query := "SELECT id, score, count(*) OVER () AS total FROM (" + sql + ") AS items ORDER BY " + order + " LIMIT @limit OFFSET @offset"
+			query := `
+				SELECT
+					id,
+					score,
+					count(*) OVER () AS total
+				FROM (` + sql + `) AS items
+				ORDER BY ` + order + `
+				LIMIT @limit
+				OFFSET @offset
+			`
 
 			var rows []item
 
@@ -263,9 +347,19 @@ func TestTxFetchPageIntegration(t *testing.T) {
 	}
 
 	err := db.Transaction(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx *pgfx.Tx) error {
+		const query = `
+			SELECT
+				id,
+				count(*) OVER () AS total
+			FROM generate_series(1::bigint, 10) AS items(id)
+			ORDER BY id
+			LIMIT @limit
+			OFFSET @offset
+		`
+
 		result, err := tx.FetchPage[item](
 			ctx,
-			"SELECT id, count(*) OVER () AS total FROM generate_series(1::bigint, 10) AS items(id) ORDER BY id LIMIT @limit OFFSET @offset",
+			query,
 			nil,
 			page.Bounds{Limit: 3, Offset: 3},
 		)

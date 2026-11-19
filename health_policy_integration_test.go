@@ -122,7 +122,7 @@ func TestHealthSQLStateStartupNotFiltered(t *testing.T) {
 		fx.NopLogger,
 		HealthModule,
 		fx.Supply(cfg),
-		MakeModule(WithHealthSQLStates(), WithPrepareConn(func(context.Context, *pgx.Conn) (bool, error) {
+		MakeModule(WithStartupPing(), WithHealthSQLStates(), WithPrepareConn(func(context.Context, *pgx.Conn) (bool, error) {
 			return true, &pgconn.PgError{Code: "53300"}
 		})),
 		fx.Populate(&connection),

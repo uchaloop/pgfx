@@ -21,7 +21,11 @@ func TestEmbeddedStructPaginationIntegration(t *testing.T) {
 	ctx, db, cleanup := makeIntegrationDB(t, 10*time.Second)
 	defer cleanup()
 
-	const sql = "SELECT * FROM (VALUES (1::bigint, 20::bigint), (2, 10)) AS items(id, x)"
+	const sql = `
+		SELECT
+			*
+		FROM (VALUES(1::bigint, 20::bigint), (2, 10)) AS items(id, x)
+	`
 	control, err := db.FetchRows[row](ctx, sql)
 	if err != nil || len(control) != 2 || control[0].X != 20 {
 		t.Fatalf("decode control: %v, %v", control, err)
@@ -30,7 +34,16 @@ func TestEmbeddedStructPaginationIntegration(t *testing.T) {
 	for _, offset := range []int64{0, 1} {
 		result, err := db.FetchPage[row](
 			ctx,
-			"SELECT id, x, count(*) OVER () AS total FROM ("+sql+") AS items ORDER BY x, id LIMIT @limit OFFSET @offset",
+			`
+				SELECT
+					id,
+					x,
+					count(*) OVER () AS total
+				FROM (`+sql+`) AS items
+				ORDER BY x, id
+				LIMIT @limit
+				OFFSET @offset
+			`,
 			nil,
 			page.Bounds{Limit: 1, Offset: offset},
 		)

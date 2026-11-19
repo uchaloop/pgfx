@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -42,8 +43,7 @@ func TestReadWithFallbackErrors(t *testing.T) {
 			calls := 0
 			value, err := ReadWithFallback(
 				t.Context(),
-				replica,
-				master,
+				[]*DB{replica, master},
 				func(ctx context.Context, db *DB) (int, error) {
 					calls++
 					if calls == 1 {
@@ -86,8 +86,7 @@ func TestReadWithFallbackSuccessAndBothErrors(t *testing.T) {
 	calls := 0
 	value, err := ReadWithFallback(
 		t.Context(),
-		replica,
-		master,
+		[]*DB{replica, master},
 		func(context.Context, *DB) (int, error) { calls++; return 42, nil },
 	)
 	if err != nil || value != 42 || calls != 1 {
@@ -102,8 +101,7 @@ func TestReadWithFallbackSuccessAndBothErrors(t *testing.T) {
 	calls = 0
 	value, err = ReadWithFallback(
 		t.Context(),
-		replica,
-		master,
+		[]*DB{replica, master},
 		func(context.Context, *DB) (int, error) {
 			calls++
 			if calls == 1 {
@@ -131,8 +129,7 @@ func TestReadWithFallbackCancellation(t *testing.T) {
 		}
 		_, err := ReadWithFallback(
 			ctx,
-			&DB{},
-			&DB{},
+			[]*DB{{}, {}},
 			func(context.Context, *DB) (int, error) { calls++; cancel(); return 0, io.EOF },
 		)
 		cancel()
@@ -159,8 +156,7 @@ func TestReadWithFallbackConnectTimeout(t *testing.T) {
 	calls := 0
 	_, err = ReadWithFallback(
 		t.Context(),
-		&DB{},
-		&DB{},
+		[]*DB{{}, {}},
 		func(context.Context, *DB) (int, error) {
 			calls++
 			if calls == 1 {
@@ -174,24 +170,139 @@ func TestReadWithFallbackConnectTimeout(t *testing.T) {
 	}
 }
 
-func TestReadWithFallbackInvalidArguments(t *testing.T) {
+func TestReadWithFallbackRejectsInput(t *testing.T) {
 	read := func(context.Context, *DB) (int, error) { t.Fatal("callback called"); return 0, nil }
 	for _, tc := range []struct {
-		replica, master *DB
-		read            func(context.Context, *DB) (int, error)
+		name string
+		dbs  []*DB
+		read func(context.Context, *DB) (int, error)
 	}{
-		{replica: nil, master: &DB{}, read: read},
-		{replica: &DB{}, master: nil, read: read},
-		{replica: &DB{}, master: &DB{}, read: nil},
+		{name: "empty", read: read},
+		{name: "nil database", dbs: []*DB{{}, nil}, read: read},
+		{name: "nil read", dbs: []*DB{{}}},
 	} {
-		if _, err := ReadWithFallback(
-			t.Context(),
-			tc.replica,
-			tc.master,
-			tc.read,
-		); err == nil {
-			t.Fatal("invalid arguments accepted")
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ReadWithFallback(t.Context(), tc.dbs, tc.read); err == nil {
+				t.Fatal("invalid arguments accepted")
+			}
+		})
+	}
+}
+
+func TestReadWithFallbackOrder(t *testing.T) {
+	dbs := []*DB{{}, {}, {}}
+
+	var order []int
+
+	value, err := ReadWithFallback(t.Context(), dbs, func(_ context.Context, db *DB) (int, error) {
+		for i := range dbs {
+			if dbs[i] == db {
+				order = append(order, i)
+			}
 		}
+
+		if len(order) < 3 {
+			return 0, &pgconn.ConnectError{}
+		}
+
+		return 7, nil
+	})
+	if err != nil || value != 7 || fmt.Sprint(order) != "[0 1 2]" {
+		t.Fatalf("value=%d order=%v error=%v", value, order, err)
+	}
+}
+
+func TestReadWithFallbackStopsOnQueryError(t *testing.T) {
+	cause := &pgconn.PgError{Code: "42P01"}
+	calls := 0
+
+	_, err := ReadWithFallback(t.Context(), []*DB{{}, {}}, func(context.Context, *DB) (int, error) {
+		calls++
+
+		return 0, cause
+	})
+
+	var pgErr *pgconn.PgError
+	if calls != 1 || err != error(cause) || !errors.As(err, &pgErr) {
+		t.Fatalf("calls=%d error=%v", calls, err)
+	}
+}
+
+func TestReadWithFallbackLabels(t *testing.T) {
+	named := func(name string) *DB { return &DB{state: &connState{name: name}} }
+
+	for _, tc := range []struct {
+		name string
+		dbs  []*DB
+		want []string
+	}{
+		{
+			name: "duplicated and empty",
+			dbs:  []*DB{named("m"), named(""), named("m")},
+			want: []string{"read m (1 of 3)", "read database 2 of 3", "read m (3 of 3)"},
+		},
+		{name: "unique", dbs: []*DB{named("a"), named("b")}, want: []string{"read a", "read b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			causes := make([]error, len(tc.dbs))
+
+			_, err := ReadWithFallback(t.Context(), tc.dbs, func(_ context.Context, db *DB) (int, error) {
+				for i := range tc.dbs {
+					if tc.dbs[i] == db {
+						causes[i] = &pgconn.ConnectError{}
+
+						return 0, causes[i]
+					}
+				}
+
+				return 0, nil
+			})
+
+			for _, label := range tc.want {
+				if !strings.Contains(err.Error(), label+":") {
+					t.Fatalf("error %q has no label %q", err, label)
+				}
+			}
+
+			for _, cause := range causes {
+				if !errors.Is(err, cause) {
+					t.Fatalf("error %v lost cause %v", err, cause)
+				}
+			}
+		})
+	}
+}
+
+func TestIsUnavailable(t *testing.T) {
+	cfg, err := pgconn.ParseConfig("host=127.0.0.1 sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.DialFunc = func(context.Context, string, string) (net.Conn, error) { return nil, context.DeadlineExceeded }
+
+	_, connectDeadline := pgconn.ConnectConfig(t.Context(), cfg)
+
+	for _, tc := range []struct {
+		name       string
+		err        error
+		isExpected bool
+	}{
+		{name: "server shutdown", err: &pgconn.PgError{Code: "57P01"}, isExpected: true},
+		{name: "breaker open", err: fmt.Errorf("x: %w", ErrBreakerOpen), isExpected: true},
+		{name: "connect deadline", err: connectDeadline, isExpected: true},
+		{name: "undefined table", err: &pgconn.PgError{Code: "42P01"}},
+		{name: "statement timeout", err: &pgconn.PgError{Code: "57014"}},
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "decoding EOF", err: pgx.ScanArgError{Err: io.EOF}},
+		{name: "nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUnavailable(tc.err); got != tc.isExpected {
+				t.Fatalf("IsUnavailable(%v) = %t", tc.err, got)
+			}
+		})
 	}
 }
 
@@ -240,8 +351,7 @@ func TestReadWithFallbackConnectionLimit(t *testing.T) {
 	calls := 0
 	value, err := ReadWithFallback(
 		t.Context(),
-		replica,
-		master,
+		[]*DB{replica, master},
 		func(ctx context.Context, db *DB) (int, error) {
 			calls++
 			if db == replica {

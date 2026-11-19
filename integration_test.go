@@ -32,7 +32,7 @@ func TestPostgresIntegration(t *testing.T) {
 		t.Fatalf("Ping: %v", err)
 	}
 
-	one, err := db.FetchValue[int](ctx, "select 1")
+	one, err := db.FetchValue[int](ctx, "SELECT 1")
 	if err != nil {
 		t.Fatalf("FetchValue: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestPostgresIntegration(t *testing.T) {
 
 	const table = "pgfx_integration_items"
 
-	if _, err := pool.Exec(ctx, "drop table if exists "+table); err != nil {
+	if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 		t.Fatalf("drop stale table: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestPostgresIntegration(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
 
-		_, _ = pool.Exec(cleanupCtx, "drop table if exists "+table)
+		_, _ = pool.Exec(cleanupCtx, "DROP TABLE IF EXISTS "+table)
 	})
 	if _, err := pool.Exec(
 		ctx,
@@ -66,7 +66,7 @@ func TestPostgresIntegration(t *testing.T) {
 			return err
 		}
 
-		count, err := tx.FetchValue[int64](ctx, "select count(*) from "+table)
+		count, err := tx.FetchValue[int64](ctx, "SELECT count(*) FROM "+table)
 		if err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func TestFxLifecycleStartFailsWhenPingFails(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
-		MakeModule(),
+		MakeModule(WithStartupPing()),
 		fx.Invoke(func(got *DB) { connection = got }),
 	)
 	if err := app.Err(); err != nil {
@@ -196,7 +196,7 @@ func requireIntegrationCount(
 ) {
 	t.Helper()
 
-	got, err := db.FetchValue[int64](ctx, "select count(*) from "+table)
+	got, err := db.FetchValue[int64](ctx, "SELECT count(*) FROM "+table)
 	if err != nil {
 		t.Fatalf("count rows: %v", err)
 	}

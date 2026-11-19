@@ -17,6 +17,8 @@ import (
 // Pool must not be replaced while DB is in use.
 type DB struct {
 	*pgxpool.Pool
+
+	state *connState
 }
 
 // FetchRows runs the query and decodes every row into a struct T. Columns map to

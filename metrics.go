@@ -48,6 +48,10 @@ type QueryMetric struct {
 	// Name is the bounded label from WithQueryName ("" if unset) - use it as the
 	// metric label, never SQL (raw statements have unbounded cardinality).
 	Name string
+	// Connection is the connection name from MakeModuleFor or WithName ("" if
+	// unnamed). Names come from configuration, so it is a bounded label for
+	// per-connection and per-shard metrics.
+	Connection string
 
 	// SQL is the raw statement when explicitly enabled with WithSQLInQueryMetrics;
 	// otherwise it is empty. For a batch it is every queued statement joined with
@@ -124,6 +128,7 @@ type copyStartKey struct{}
 type metricsTracer struct {
 	fn            QueryMetricFunc
 	isSQLIncluded bool
+	connection    string
 }
 
 func (t metricsTracer) TraceQueryStart(
@@ -152,6 +157,7 @@ func (t metricsTracer) TraceQueryEnd(
 	t.fn(QueryMetric{
 		Kind:         KindQuery,
 		Name:         QueryName(ctx),
+		Connection:   t.connection,
 		SQL:          start.sql,
 		Duration:     time.Since(start.startedAt),
 		RowsAffected: data.CommandTag.RowsAffected(),
@@ -216,6 +222,7 @@ func (t metricsTracer) TraceBatchEnd(
 	t.fn(QueryMetric{
 		Kind:         KindBatch,
 		Name:         QueryName(ctx),
+		Connection:   t.connection,
 		SQL:          start.sql,
 		Duration:     time.Since(start.startedAt),
 		RowsAffected: start.rows,
@@ -244,6 +251,7 @@ func (t metricsTracer) TraceCopyFromEnd(
 	t.fn(QueryMetric{
 		Kind:         KindCopyFrom,
 		Name:         QueryName(ctx),
+		Connection:   t.connection,
 		Duration:     time.Since(startedAt),
 		RowsAffected: data.CommandTag.RowsAffected(),
 		Err:          data.Err,

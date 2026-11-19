@@ -13,55 +13,35 @@ func makeValidConfig() Config {
 	return Config{Host: "127.0.0.1:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 }
 
-// TestMultiplePoolsGraphNoConflict verifies that the untagged default pool and
-// several tagged pools coexist in one container. fx distinguishes them by tag,
-// so there is no duplicate-type conflict; ValidateApp fails if there were one.
-func TestMultiplePoolsGraphNoConflict(t *testing.T) {
-	err := fx.ValidateApp(
-		fx.NopLogger,
-		fx.Supply(makeValidConfig()),
-		fx.Supply(fx.Annotate(makeValidConfig(), fx.ResultTags(`name:"replica"`))),
-		fx.Supply(fx.Annotate(makeValidConfig(), fx.ResultTags(`name:"analytics"`))),
-		MakeModule(),
-		MakeModuleFor("replica"),
-		MakeModuleFor("analytics"),
-		fx.Invoke(fx.Annotate(
-			func(primary, replica, analytics *DB) {},
-			fx.ParamTags(``, `name:"replica"`, `name:"analytics"`),
-		)),
-	)
-	if err != nil {
-		t.Fatalf("ValidateApp with three pools: %v", err)
-	}
-}
-
 // TestMultiplePoolsAreDistinct checks that named and default connections have
 // independent identities before their pools start.
 func TestMultiplePoolsAreDistinct(t *testing.T) {
 	primaryCfg := Config{Host: "primary:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 	replicaCfg := Config{Host: "replica:5432", Database: "app", TLS: TLSConfig{Mode: "disable"}}
 
-	var primary, replica *DB
+	var primary, replica, analytics *DB
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(primaryCfg),
 		fx.Supply(fx.Annotate(replicaCfg, fx.ResultTags(`name:"replica"`))),
+		fx.Supply(fx.Annotate(makeValidConfig(), fx.ResultTags(`name:"analytics"`))),
 		MakeModule(),
 		MakeModuleFor("replica"),
+		MakeModuleFor("analytics"),
 		fx.Invoke(fx.Annotate(
-			func(p, r *DB) { primary, replica = p, r },
-			fx.ParamTags(``, `name:"replica"`),
+			func(p, r, a *DB) { primary, replica, analytics = p, r, a },
+			fx.ParamTags(``, `name:"replica"`, `name:"analytics"`),
 		)),
 	)
 	if err := app.Err(); err != nil {
-		t.Fatalf("build two pools: %v", err)
+		t.Fatalf("build three pools: %v", err)
 	}
 
-	if primary == nil || replica == nil {
+	if primary == nil || replica == nil || analytics == nil {
 		t.Fatal("a pool was not provided")
 	}
 
-	if primary == replica {
+	if primary == replica || primary == analytics || replica == analytics {
 		t.Fatal("the default and named connection resolved to the same pool")
 	}
 }
@@ -99,103 +79,80 @@ func TestMakeModuleRequiresConfig(t *testing.T) {
 	}
 }
 
-func TestDBBeforeStartHasNoPool(t *testing.T) {
-	var lifecycle capturedLifecycle
-	c, err := makeLifecycleDB(
-		makeValidConfig(),
-		&lifecycle,
-		nil,
-		nil,
-		connectionHealth{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMakeModuleCancelledStartDoesNotAllocatePool(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		health HealthConfig
+	}{
+		{name: "health disabled"},
+		{name: "health enabled", health: HealthConfig{
+			IsEnabled:    true,
+			Interval:     time.Second,
+			Timeout:      time.Second,
+			FailureAfter: time.Minute,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := makeValidConfig()
+			cfg.Health = tc.health
 
-	if c.Pool != nil {
-		t.Fatal("pool published before successful start")
-	}
-}
+			var db *DB
 
-func TestDBConstructionDoesNotCreatePool(t *testing.T) {
-	app := fx.New(
-		fx.NopLogger,
-		fx.Supply(makeValidConfig()),
-		MakeModule(),
-		fx.Invoke(func(c *DB) error {
-			if c.Pool != nil {
-				t.Fatal("pool allocated during construction")
+			app := fx.New(
+				fx.NopLogger,
+				fx.Supply(cfg),
+				HealthModule,
+				MakeModule(),
+				fx.Populate(&db),
+			)
+			if err := app.Err(); err != nil {
+				t.Fatal(err)
 			}
 
-			return nil
-		}),
-	)
-	if err := app.Err(); err != nil {
-		t.Fatal(err)
-	}
-}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
 
-func TestMakeModuleCancelledStartDoesNotAllocatePool(t *testing.T) {
-	var db *DB
-	app := fx.New(
-		fx.NopLogger,
-		fx.Supply(makeValidConfig()),
-		MakeModule(),
-		fx.Populate(&db),
-	)
-	if err := app.Err(); err != nil {
-		t.Fatal(err)
-	}
+			if tc.health.IsEnabled {
+				var lifecycle capturedLifecycle
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := app.Start(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Start: %v", err)
-	}
+				direct, err := makeLifecycleDB(
+					cfg,
+					&lifecycle,
+					nil,
+					nil,
+					connectionHealth{shutdowner: makeHealthShutdowner(&failedShutdowner{})},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
 
-	if err := app.Stop(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+				if err := lifecycle.hooks[0].OnStart(ctx); !errors.Is(err, context.Canceled) {
+					t.Fatalf("OnStart: %v", err)
+				}
 
-	if db.Pool != nil {
-		t.Fatal("pool allocated despite cancelled startup")
+				if direct.Pool != nil {
+					t.Fatal("pool allocated by OnStart despite cancelled startup")
+				}
+			}
+
+			if err := app.Start(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Start: %v", err)
+			}
+
+			if err := app.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			if db.Pool != nil {
+				t.Fatal("pool allocated despite cancelled startup")
+			}
+		})
 	}
 }
 
 type capturedLifecycle struct{ hooks []fx.Hook }
 
 func (l *capturedLifecycle) Append(hook fx.Hook) { l.hooks = append(l.hooks, hook) }
-
-func TestMakeModulePingFailureDoesNotPublishPool(t *testing.T) {
-	var lifecycle capturedLifecycle
-	cfg := makeValidConfig()
-	cfg.Health = HealthConfig{
-		IsEnabled:    true,
-		Interval:     time.Second,
-		Timeout:      time.Second,
-		FailureAfter: time.Minute,
-	}
-	db, err := makeLifecycleDB(
-		cfg,
-		&lifecycle,
-		nil,
-		nil,
-		connectionHealth{shutdowner: makeHealthShutdowner(&failedShutdowner{})},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := lifecycle.hooks[0].OnStart(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("OnStart: %v", err)
-	}
-
-	if db.Pool != nil {
-		t.Fatal("pool published before successful start")
-	}
-}
 
 func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
 	errExpected := errors.New("earlier hook failed")
@@ -223,5 +180,43 @@ func TestMakeModuleEarlierHookFailureDoesNotAllocatePool(t *testing.T) {
 
 	if db.Pool != nil {
 		t.Fatal("pool allocated after an earlier hook failed")
+	}
+}
+
+func TestModuleStartsLazily(t *testing.T) {
+	unreachable := Config{Host: "127.0.0.1:1", Database: "x", TLS: TLSConfig{Mode: "disable"}}
+
+	for _, tc := range []struct {
+		name      string
+		opts      []Option
+		isFailure bool
+	}{
+		{name: "lazy"},
+		{name: "startup ping", opts: []Option{WithStartupPing()}, isFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var lifecycle capturedLifecycle
+
+			db, err := makeLifecycleDB(unreachable, &lifecycle, nil, nil, connectionHealth{}, tc.opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err = lifecycle.hooks[0].OnStart(ctx)
+			if (err != nil) != tc.isFailure {
+				t.Fatalf("OnStart: %v", err)
+			}
+
+			if !tc.isFailure && db.Pool == nil {
+				t.Fatal("lazy start did not publish the pool")
+			}
+
+			if err := lifecycle.hooks[0].OnStop(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

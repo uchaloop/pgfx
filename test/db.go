@@ -29,6 +29,29 @@ import (
 // The caller owns a successful DB and must close it (for example, t.Cleanup).
 // Options have the same semantics as pgfx.MakeDB; tracing is off by default.
 func MakeDB(ctx context.Context, opts ...pgfx.Option) (*pgfx.DB, error) {
+	cfg, err := Config()
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := pgfx.MakeDB(ctx, cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := db.Ping(ctx); err != nil {
+		db.Close()
+
+		return nil, err
+	}
+
+	return db, nil
+}
+
+// Config returns the pgfx.Config MakeDB uses, read from the same PGFX_TEST_*
+// variables, so a test can adjust it - for example set Breaker or Timeouts -
+// before calling pgfx.MakeDB itself. It does not check that the host is set.
+func Config() (pgfx.Config, error) {
 	mode := os.Getenv("PGFX_TEST_TLS_MODE")
 	if len(mode) == 0 {
 		mode = "disable"
@@ -45,26 +68,15 @@ func MakeDB(ctx context.Context, opts ...pgfx.Option) (*pgfx.DB, error) {
 	if value := os.Getenv("PGFX_TEST_MAX_CONNS"); len(value) != 0 {
 		maxConns, err := strconv.ParseInt(value, 10, 32)
 		if err != nil {
-			return nil, fmt.Errorf("invalid PGFX_TEST_MAX_CONNS: %w", err)
+			return pgfx.Config{}, fmt.Errorf("invalid PGFX_TEST_MAX_CONNS: %w", err)
 		}
 
 		if maxConns < 0 {
-			return nil, fmt.Errorf("PGFX_TEST_MAX_CONNS must not be negative")
+			return pgfx.Config{}, fmt.Errorf("PGFX_TEST_MAX_CONNS must not be negative")
 		}
 
 		cfg.Pool.MaxConns = int32(maxConns)
 	}
 
-	db, err := pgfx.MakeDB(ctx, cfg, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := db.Ping(ctx); err != nil {
-		db.Close()
-
-		return nil, err
-	}
-
-	return db, nil
+	return cfg, nil
 }

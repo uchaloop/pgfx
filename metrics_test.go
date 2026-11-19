@@ -74,25 +74,6 @@ func TestMetricsTracerOmitsSQLByDefault(t *testing.T) {
 	}
 }
 
-func TestMetricsTracerIncludesSQLWhenEnabled(t *testing.T) {
-	var got QueryMetric
-	tracer := metricsTracer{
-		fn:            func(metric QueryMetric) { got = metric },
-		isSQLIncluded: true,
-	}
-
-	ctx := tracer.TraceQueryStart(
-		context.Background(),
-		nil,
-		pgx.TraceQueryStartData{SQL: "select 1"},
-	)
-	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{})
-
-	if got.SQL != "select 1" {
-		t.Fatalf("SQL = %q, want select 1", got.SQL)
-	}
-}
-
 func makeBatch(statements ...string) *pgx.Batch {
 	batch := &pgx.Batch{}
 

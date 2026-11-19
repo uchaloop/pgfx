@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uchaloop/secret/v2"
 	"github.com/uchaloop/validate"
@@ -59,6 +60,9 @@ type Config struct {
 
 	// Timeouts configures connection timeouts.
 	Timeouts TimeoutConfig `envPrefix:"TIMEOUTS_"`
+
+	// Breaker enables a per-connection circuit breaker; disabled by default.
+	Breaker BreakerConfig `envPrefix:"BREAKER_"`
 }
 
 // EnvPrefix declares the default environment prefix for compatible loaders.
@@ -120,6 +124,16 @@ type TimeoutConfig struct {
 	// Connect bounds establishing a single connection. Zero leaves the pgx
 	// default.
 	Connect time.Duration `env:"CONNECT" envDescription:"Connection establishment timeout; zero keeps the pgx default."`
+
+	// Statement is sent as the statement_timeout startup parameter in whole
+	// milliseconds. Zero sends nothing. PgBouncer in transaction pooling mode
+	// rejects or ignores startup parameters: leave it zero there and set the
+	// timeout on the server role instead.
+	Statement time.Duration `env:"STATEMENT" envDescription:"Statement timeout sent as a startup parameter; zero sends nothing. Leave zero behind PgBouncer transaction pooling."`
+
+	// LockWait is sent as the lock_timeout startup parameter in whole
+	// milliseconds, with the same rules as Statement.
+	LockWait time.Duration `env:"LOCK_WAIT" envDescription:"Lock wait timeout sent as a startup parameter; zero sends nothing. Leave zero behind PgBouncer transaction pooling."`
 }
 
 // Validate checks what the values mean, once a loader has supplied them: every
@@ -147,6 +161,11 @@ func (cfg Config) Validate() error {
 		"pool.min_conns must not exceed pool.max_conns",
 	)
 	errs.Require(cfg.Timeouts.Connect >= 0, "timeouts.connect must not be negative")
+	errs.Require(isMillisecondTimeout(cfg.Timeouts.Statement), "timeouts.statement must be zero or at least 1ms")
+	errs.Require(isMillisecondTimeout(cfg.Timeouts.LockWait), "timeouts.lock_wait must be zero or at least 1ms")
+	errs.Require(cfg.Breaker.Failures >= 0, "breaker.failures must not be negative")
+	errs.Require(cfg.Breaker.OpenFor >= 0, "breaker.open_for must not be negative")
+	errs.Require(cfg.Breaker.Failures == 0 || cfg.Breaker.OpenFor > 0, "breaker.open_for must be positive when breaker.failures is set")
 
 	if cfg.Health.IsEnabled {
 		errs.Require(cfg.Health.Interval > 0, "health.interval must be positive")
@@ -265,11 +284,15 @@ func (cfg Config) poolConfig(opts *options) (*pgxpool.Config, error) {
 	}
 
 	if len(cfg.AppName) != 0 {
-		if poolCfg.ConnConfig.RuntimeParams == nil {
-			poolCfg.ConnConfig.RuntimeParams = make(map[string]string)
-		}
+		setRuntimeParam(poolCfg.ConnConfig, "application_name", cfg.AppName)
+	}
 
-		poolCfg.ConnConfig.RuntimeParams["application_name"] = cfg.AppName
+	if cfg.Timeouts.Statement > 0 {
+		setRuntimeParam(poolCfg.ConnConfig, "statement_timeout", strconv.FormatInt(cfg.Timeouts.Statement.Milliseconds(), 10))
+	}
+
+	if cfg.Timeouts.LockWait > 0 {
+		setRuntimeParam(poolCfg.ConnConfig, "lock_timeout", strconv.FormatInt(cfg.Timeouts.LockWait.Milliseconds(), 10))
 	}
 
 	applyPoolLimits(poolCfg, cfg.Pool)
@@ -330,4 +353,19 @@ func quoteDSN(value string) string {
 	value = strings.ReplaceAll(value, `'`, `\'`)
 
 	return "'" + value + "'"
+}
+
+// isMillisecondTimeout accepts zero (not sent) or a duration that survives the
+// conversion to whole milliseconds; a positive sub-millisecond value would
+// silently become zero and disable the server timeout.
+func isMillisecondTimeout(timeout time.Duration) bool {
+	return timeout == 0 || timeout >= time.Millisecond
+}
+
+func setRuntimeParam(cfg *pgx.ConnConfig, key, value string) {
+	if cfg.RuntimeParams == nil {
+		cfg.RuntimeParams = make(map[string]string)
+	}
+
+	cfg.RuntimeParams[key] = value
 }

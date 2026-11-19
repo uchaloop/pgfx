@@ -5,30 +5,28 @@ import (
 	"testing"
 )
 
-func TestMakeDBValidConfigCreatesPool(t *testing.T) {
-	// pgxpool.NewWithConfig does not dial until first use, so this succeeds
-	// without a running database.
-	cfg := Config{
-		Host:     "127.0.0.1:5432",
-		Database: "app",
-		User:     "app",
-		TLS:      TLSConfig{Mode: "disable"},
+func TestMakeDBRejectsInvalidConfig(t *testing.T) {
+	if _, err := MakeDB(context.Background(), Config{Database: "app"}); err == nil {
+		t.Fatal("expected an error for a config without a host")
 	}
+}
 
-	pool, err := MakeDB(context.Background(), cfg)
+func TestMakeDBLazy(t *testing.T) {
+	db, err := MakeDB(context.Background(), Config{Host: "127.0.0.1:1", Database: "x", TLS: TLSConfig{Mode: "disable"}})
 	if err != nil {
 		t.Fatalf("MakeDB: %v", err)
 	}
 
-	if pool == nil {
-		t.Fatal("MakeDB returned a nil pool")
-	}
-
-	pool.Close()
+	db.Close()
 }
 
-func TestMakeDBRejectsInvalidConfig(t *testing.T) {
-	if _, err := MakeDB(context.Background(), Config{Database: "app"}); err == nil {
-		t.Fatal("expected an error for a config without a host")
+func TestMakeDBStartupPing(t *testing.T) {
+	db, err := MakeDB(
+		context.Background(),
+		Config{Host: "127.0.0.1:1", Database: "x", TLS: TLSConfig{Mode: "disable"}},
+		WithStartupPing(),
+	)
+	if err == nil || db != nil {
+		t.Fatalf("MakeDB = %v, %v; want ping error", db, err)
 	}
 }

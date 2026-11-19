@@ -147,32 +147,7 @@ func TestHealthPostgresRestart(t *testing.T) {
 	var isStopped bool
 	control := func(action string) {
 		t.Helper()
-		args := []string{
-			"-D",
-			data,
-			"-w",
-			action,
-		}
-		if action == "stop" {
-			args = append(args, "-m", "fast")
-		}
-
-		if action == "start" {
-			args = append(args, "-l", data+"/health-test.log")
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if output, err := exec.CommandContext(ctx, ctl, args...).CombinedOutput(); err != nil {
-			t.Fatalf(
-				"pg_ctl %s: %v\n%s",
-				action,
-				err,
-				output,
-			)
-		}
-
+		controlPostgres(t, ctl, data, action)
 		isStopped = action == "stop"
 	}
 	control("stop")
@@ -356,5 +331,28 @@ func TestHealthFxStopCancelsMonitorBeforePoolClose(t *testing.T) {
 	case signal := <-app.Wait():
 		t.Fatalf("normal stop requested shutdown: %v", signal)
 	default:
+	}
+}
+
+// controlPostgres runs pg_ctl stop (fast) or start on a disposable cluster and
+// waits for it, bounded by ten seconds.
+func controlPostgres(t *testing.T, ctl, data, action string) {
+	t.Helper()
+
+	args := []string{"-D", data, "-w", action}
+
+	if action == "stop" {
+		args = append(args, "-m", "fast")
+	}
+
+	if action == "start" {
+		args = append(args, "-l", data+"/health-test.log")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if output, err := exec.CommandContext(ctx, ctl, args...).CombinedOutput(); err != nil {
+		t.Fatalf("pg_ctl %s: %v\n%s", action, err, output)
 	}
 }
