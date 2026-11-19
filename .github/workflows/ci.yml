@@ -37,6 +37,18 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      postgres_b:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: pgfx_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pgfx_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -77,10 +89,39 @@ jobs:
       - name: Integration test
         env:
           PGFX_TEST_HOST: localhost:5432
+          PGFX_TEST_HOST_B: localhost:5433
           PGFX_TEST_DATABASE: pgfx_test
           PGFX_TEST_USER: postgres
           PGFX_TEST_PASSWORD: postgres
         run: go test -count=1 -race -timeout=5m -tags=integration ./...
+
+      - name: Two-instance sharding test
+        env:
+          PGFX_TEST_HOST: localhost:5432
+          PGFX_TEST_HOST_B: localhost:5433
+          PGFX_TEST_DATABASE: pgfx_test
+          PGFX_TEST_USER: postgres
+          PGFX_TEST_PASSWORD: postgres
+        run: |
+          go test -count=1 -race -timeout=5m -tags=integration -run '^(TestRouterTwoInstancesIntegration|TestWriteConvergesWithVersion)$' -json ./shard | tee "$RUNNER_TEMP/shard-results.jsonl"
+          jq -se 'any(.[]; .Action == "pass" and .Test == "TestRouterTwoInstancesIntegration") and any(.[]; .Action == "pass" and .Test == "TestWriteConvergesWithVersion")' "$RUNNER_TEMP/shard-results.jsonl"
+
+      - name: Sharding examples and Docker recovery
+        env:
+          PGFX_TEST_HOST: localhost:5432
+          PGFX_TEST_HOST_B: localhost:5433
+          PGFX_TEST_DATABASE: pgfx_test
+          PGFX_TEST_USER: postgres
+          PGFX_TEST_PASSWORD: postgres
+          PGFX_SHARD_DOCKER_CONTAINER: ${{ job.services.postgres_b.id }}
+        run: |
+          go test -count=1 -race -timeout=2m -tags=integration -json ./examples/sharding | tee "$RUNNER_TEMP/shard-example-results.jsonl"
+          jq -se '
+            ["TestItemTransaction", "TestItemMigration", "TestPartitionPartialSuccess", "TestFxShards", "TestShardDockerRecovery"] as $required |
+            [.[] | select(.Action == "pass") | .Test] as $passed |
+            ($required - $passed | length) == 0
+          ' "$RUNNER_TEMP/shard-example-results.jsonl"
+          go run ./examples/sharding
 
   health-restart:
     runs-on: ubuntu-24.04
@@ -124,8 +165,8 @@ jobs:
 
       - name: Test restart and recovery
         run: |
-          go test -count=1 -race -tags=integration -timeout=5m -run '^TestHealthPostgresRestart$' -json . | tee "$RUNNER_TEMP/health-results.jsonl"
-          jq -se 'any(.[]; .Action == "pass" and .Test == "TestHealthPostgresRestart")' "$RUNNER_TEMP/health-results.jsonl"
+          go test -count=1 -race -tags=integration -timeout=5m -run '^(TestHealthPostgresRestart|TestBreakerPostgresRestart)$' -json . | tee "$RUNNER_TEMP/health-results.jsonl"
+          jq -se 'any(.[]; .Action == "pass" and .Test == "TestHealthPostgresRestart") and any(.[]; .Action == "pass" and .Test == "TestBreakerPostgresRestart")' "$RUNNER_TEMP/health-results.jsonl"
 
       - name: Stop disposable cluster
         if: always()

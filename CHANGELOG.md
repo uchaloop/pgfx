@@ -7,6 +7,35 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-19
+
+This release contains breaking API changes.
+
+### Added
+
+- Package `shard` for application-level sharding: `ModuloBuckets`,
+  `StringBuckets` and `MakeBuckets`; `BucketSet`; a text `LayoutConfig` for ENV,
+  YAML and JSON with the `SHARDS_` prefix; `MakeLayout` and
+  `ValidateTransition`; `Router` with `Route`, `Update`, `Write`, `Read`,
+  `Shard.Read`, `Each` and `Partition`.
+- Per-connection breaker: `Config.Breaker` (`BREAKER_FAILURES`,
+  `BREAKER_OPEN_FOR`), `DB.Breaker`, `Breaker.Attempt`, `Attempt.Done` and
+  `Attempt.Release`, `ErrBreakerOpen`.
+- `WithName` and `DB.Name`; `MakeModuleFor` names the connection and adds it to
+  the `group:"pgfx"` value group; `QueryMetric.Connection`.
+- `WithStartupPing`, `IsUnavailable`, `ErrNoConnState`.
+- `TimeoutConfig.Statement` and `TimeoutConfig.LockWait`, sent as
+  `statement_timeout` and `lock_timeout`.
+- `pgfxtest.Config`.
+
+### Changed
+
+- `ReadWithFallback` takes an ordered `[]*DB` and labels each cause with the
+  connection name.
+- `MakeModule` and `MakeModuleFor` no longer ping on start: startup does not
+  wait for the server and does not fail because it is unavailable. Add
+  `WithStartupPing()` to keep the previous behaviour.
+
 ## [0.13.0] - 2026-11-18
 
 ### Added
@@ -305,7 +334,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/uchaloop/pgfx/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/uchaloop/pgfx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/uchaloop/pgfx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/uchaloop/pgfx/compare/v0.10.0...v0.11.0

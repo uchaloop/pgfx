@@ -20,8 +20,9 @@ type connectionHealth struct {
 }
 
 // MakeModule provides an untagged *DB from an untagged Config.
-// Configuration is validated during construction. The pool is created and
-// pinged on start, then closed on stop. Consumers only store DB in constructors
+// Configuration is validated during construction. The pool is created on
+// start and closed on stop. Start does not wait for the server and does not
+// fail because it is unavailable unless WithStartupPing is set. Consumers only store DB in constructors
 // and run queries in their OnStart hooks or later. Config.Health enables background checks
 // and shutdown on sustained failure. Tracing, query metrics and *slog.Logger
 // are optional dependencies. Enabled health checks require HealthModule at
@@ -39,6 +40,9 @@ func MakeModule(opts ...Option) fx.Option {
 // the same; a consumer selects it with fx.ParamTags. The application supplies
 // the tagged Config explicitly, for example with fx.Supply and fx.ResultTags.
 // opts configure only this connection, with the same ordering as MakeModule.
+// The DB is named after name (WithName is ignored) and is also provided into
+// the value group `group:"pgfx"`, so a consumer can receive every named
+// connection as []*pgfx.DB and select them by Name.
 func MakeModuleFor(name string, opts ...Option) fx.Option {
 	return fx.Module("pgfx-"+name, makeDBProvider(name, opts...))
 }
@@ -52,9 +56,10 @@ func makeDBProvider(name string, opts ...Option) fx.Option {
 
 	if len(name) != 0 {
 		tag = utilfx.NameTag(name)
+		opts = append(opts, WithName(name))
 	}
 
-	return fx.Provide(
+	provider := fx.Provide(
 		fx.Annotate(
 			func(
 				cfg Config,
@@ -93,6 +98,21 @@ func makeDBProvider(name string, opts ...Option) fx.Option {
 			fx.ResultTags(tag),
 		),
 	)
+
+	if len(tag) == 0 {
+		return provider
+	}
+
+	// Fx cannot tag one result with both a name and a group, so a second
+	// provider adds the same named DB to the pgfx group.
+	return fx.Options(
+		provider,
+		fx.Provide(fx.Annotate(
+			func(db *DB) *DB { return db },
+			fx.ParamTags(tag),
+			fx.ResultTags(`group:"pgfx"`),
+		)),
+	)
 }
 
 // makeLifecycleDB builds a handle from the injected Config and optional runtime
@@ -128,12 +148,15 @@ func makeLifecycleDB(
 	}
 
 	resolvedOpts := makeOptions(opts...)
+	state := &connState{name: resolvedOpts.name, breaker: makeBreaker(cfg.Breaker)}
+	resolvedOpts.state = state
+
 	poolCfg, err := cfg.poolConfig(resolvedOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	db := &DB{}
+	db := &DB{state: state}
 	var mu sync.Mutex
 	var isStopped bool
 	var cancel context.CancelFunc
@@ -141,15 +164,21 @@ func makeLifecycleDB(
 
 	lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 			if err != nil {
 				return err
 			}
 
-			if err := pool.Ping(ctx); err != nil {
-				pool.Close()
+			if resolvedOpts.isStartupPing {
+				if err := pool.Ping(ctx); err != nil {
+					pool.Close()
 
-				return err
+					return err
+				}
 			}
 
 			mu.Lock()

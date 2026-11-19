@@ -47,7 +47,13 @@ func TestFetchOptionalRowPostgres(t *testing.T) {
 			t.Fatalf("FetchRow contract: %v", err)
 		}
 
-		got, isFound, err = fetch(ctx, "SELECT id FROM generate_series(1::bigint,2) AS items(id)")
+		const query = `
+			SELECT
+				id
+			FROM generate_series(1::bigint, 2) AS items(id)
+		`
+
+		got, isFound, err = fetch(ctx, query)
 		if !errors.Is(err, pgx.ErrTooManyRows) || isFound || got != (row{}) {
 			t.Fatalf(
 				"many: %+v, %v, %v",

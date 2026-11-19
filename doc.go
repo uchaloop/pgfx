@@ -22,9 +22,11 @@ so WithPrefix("MASTER_") preserves legacy master variables. Deploy renamed
 variables with the corresponding binary; pgfx never reads them itself.
 
 [MakeDB] creates a pool owned by the caller, who must close it. Pool creation does
-not verify connectivity; use Ping when startup verification is required.
-[MakeModule] supplies *DB through Uber Fx. It creates and pings the pool
-on start and closes it on stop. Consumers use DB directly in their own
+not verify connectivity; pass [WithStartupPing] or call Ping when startup
+verification is required.
+[MakeModule] supplies *DB through Uber Fx. It creates the pool on start and
+closes it on stop. Start does not wait for the server and does not fail because
+it is unavailable; [WithStartupPing] restores a failing start. Consumers use DB directly in their own
 OnStart hooks or after successful startup. Constructors only store the pointer:
 the embedded Pool is nil until startup succeeds. Consumers finish their work
 in OnStop before the database hook closes the pool. They must not close it themselves.
@@ -98,11 +100,30 @@ rows the query matches in a single statement. The query binds @limit and
 Package [github.com/uchaloop/pgfx/page] converts a page number and size into
 bounds and builds the ORDER BY list from a whitelist of SQL expressions.
 
+# Connection breaker
+
+Config.Breaker enables a per-connection breaker ([DB.Breaker]): consecutive
+failed operations open it, and after a pause one probe operation decides
+whether it closes. An operation runs between [Breaker.Attempt] and
+[Attempt.Done]; queries outside an Attempt are counted one command at a time.
+An open breaker refuses Attempt with [ErrBreakerOpen] but does not block
+queries issued directly through DB. Without a breaker nothing is installed.
+
+# Sharding
+
+Package [github.com/uchaloop/pgfx/shard] routes keys to shards inside the
+application: buckets, a text layout of shards and bucket ranges, transition
+checks for moving ranges, and a router. Router.Write, Router.Read and Shard.Read
+run database callbacks inside breaker attempts. Router.Each leaves attempt
+management to its callback; Router.Partition only groups items and does not
+acquire attempts. [MakeModuleFor] names each connection and adds it to the value
+group `group:"pgfx"` that the router consumes.
+
 # Read fallback
 
-[ReadWithFallback] repeats a fully consumed, side-effect-free read on master
-only when replica fails with a qualifying availability error. Both attempts
-share the caller context. Wrap an entire paginated read to preserve its snapshot;
+[ReadWithFallback] runs a fully consumed, side-effect-free read on a list of
+databases in order, moving on only when an attempt fails with a qualifying
+availability error ([IsUnavailable]). All attempts share the caller context. Wrap an entire paginated read to preserve its snapshot;
 no existing transaction is transferred. See the function contract for error policy.
 
 # Transactions

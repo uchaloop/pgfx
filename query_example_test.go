@@ -119,11 +119,15 @@ func ExampleDB_FetchPage() {
 
 	// The query filters once; count(*) OVER () counts every matching row.
 	const query = `
-		SELECT id, count(*) OVER () AS total
+		SELECT
+			id,
+			count(*) OVER () AS total
 		FROM generate_series(1::bigint, 10) AS items(id)
 		WHERE id > @min
 		ORDER BY {order}
-		LIMIT @limit OFFSET @offset`
+		LIMIT @limit
+		OFFSET @offset
+	`
 
 	sortable := page.Sortable[string]{"id": "id"}
 

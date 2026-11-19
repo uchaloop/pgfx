@@ -20,13 +20,24 @@ func TestErrorClassificationPostgres(t *testing.T) {
 	}
 	defer conn.Release()
 
-	_, err = conn.Exec(ctx, `CREATE TEMP TABLE pgfx_error_parent (id int PRIMARY KEY);
-CREATE TEMP TABLE pgfx_error_child (
- id int CONSTRAINT pgfx_error_pk PRIMARY KEY,
- parent_id int REFERENCES pgfx_error_parent(id),
- value int NOT NULL CHECK (value > 0)
-);
-INSERT INTO pgfx_error_child VALUES (1, NULL, 1)`)
+	const query = `
+		CREATE TEMP TABLE pgfx_error_parent (
+			id int PRIMARY KEY
+		);
+		CREATE TEMP TABLE pgfx_error_child (
+			id int CONSTRAINT pgfx_error_pk PRIMARY KEY,
+			parent_id int REFERENCES pgfx_error_parent(id),
+			value int NOT NULL CHECK (value > 0)
+		);
+		INSERT INTO pgfx_error_child
+		VALUES (
+			1,
+			NULL,
+			1
+		)
+	`
+
+	_, err = conn.Exec(ctx, query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,10 +46,38 @@ INSERT INTO pgfx_error_child VALUES (1, NULL, 1)`)
 		sql, code string
 		isMatch   func(error) bool
 	}{
-		{sql: "INSERT INTO pgfx_error_child VALUES (1, NULL, 1)", code: "23505", isMatch: pgfx.IsUniqueViolation},
-		{sql: "INSERT INTO pgfx_error_child VALUES (2, 99, 1)", code: "23503", isMatch: pgfx.IsForeignKeyViolation},
-		{sql: "INSERT INTO pgfx_error_child VALUES (2, NULL, NULL)", code: "23502", isMatch: pgfx.IsNotNullViolation},
-		{sql: "INSERT INTO pgfx_error_child VALUES (2, NULL, -1)", code: "23514", isMatch: pgfx.IsCheckViolation},
+		{sql: `
+			INSERT INTO pgfx_error_child
+			VALUES (
+				1,
+				NULL,
+				1
+			)
+		`, code: "23505", isMatch: pgfx.IsUniqueViolation},
+		{sql: `
+			INSERT INTO pgfx_error_child
+			VALUES (
+				2,
+				99,
+				1
+			)
+		`, code: "23503", isMatch: pgfx.IsForeignKeyViolation},
+		{sql: `
+			INSERT INTO pgfx_error_child
+			VALUES (
+				2,
+				NULL,
+				NULL
+			)
+		`, code: "23502", isMatch: pgfx.IsNotNullViolation},
+		{sql: `
+			INSERT INTO pgfx_error_child
+			VALUES (
+				2,
+				NULL,
+				-1
+			)
+		`, code: "23514", isMatch: pgfx.IsCheckViolation},
 		{sql: "SELECT 'oops'::integer", code: "22P02", isMatch: pgfx.IsInvalidTextRepresentation},
 		{sql: "SELECT 32768::smallint", code: "22003", isMatch: pgfx.IsNumericValueOutOfRange},
 		{sql: "SELECT * FROM pg_temp.pgfx_missing_table", code: "42P01", isMatch: pgfx.IsUndefinedTable},
@@ -63,9 +102,15 @@ INSERT INTO pgfx_error_child VALUES (1, NULL, 1)`)
 
 	for _, value := range []string{`50%_off\sale`, "O'Reilly", "Иван", ""} {
 		var isExact, isOther bool
+		const query = `
+			SELECT
+				$1::text LIKE $2,
+				($1::text || 'x') LIKE $2
+		`
+
 		err := conn.QueryRow(
 			ctx,
-			"SELECT $1::text LIKE $2, ($1::text || 'x') LIKE $2",
+			query,
 			value,
 			pgfx.EscapeLike(value),
 		).Scan(&isExact, &isOther)

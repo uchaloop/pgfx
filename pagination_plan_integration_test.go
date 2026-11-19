@@ -62,9 +62,30 @@ func TestPagePlans(t *testing.T) {
 	}
 
 	const (
-		windowSQL = "SELECT id, score, label, meta, count(*) OVER () AS total FROM bench_rows ORDER BY id LIMIT @limit OFFSET @offset"
-		rowsSQL   = "SELECT id, score, label, meta FROM bench_rows ORDER BY id LIMIT $1 OFFSET $2"
-		countSQL  = "SELECT COUNT(*) FROM bench_rows"
+		windowSQL = `
+			SELECT
+				id,
+				score,
+				label,
+				meta,
+				count(*) OVER () AS total
+			FROM bench_rows
+			ORDER BY id
+			LIMIT @limit
+			OFFSET @offset
+		`
+		rowsSQL = `
+			SELECT
+				id,
+				score,
+				label,
+				meta
+			FROM bench_rows
+			ORDER BY id
+			LIMIT $1
+			OFFSET $2
+		`
+		countSQL = "SELECT count(*) FROM bench_rows"
 	)
 
 	for _, mode := range []struct {

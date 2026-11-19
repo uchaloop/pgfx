@@ -23,13 +23,28 @@ func TestTransactionValuePostgres(t *testing.T) {
 	}
 
 	got, err := db.TransactionValue(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) (int, error) {
-		_, err := tx.Exec(ctx, "CREATE TEMP TABLE value_test (id int UNIQUE DEFERRABLE INITIALLY DEFERRED) ON COMMIT DROP")
+		const query = `
+			CREATE TEMP TABLE value_test (
+				id int UNIQUE DEFERRABLE INITIALLY DEFERRED
+			) ON COMMIT DROP
+		`
+
+		_, err := tx.Exec(ctx, query)
 		if err != nil {
 			return 0, err
 		}
 
 		nested, err := tx.TransactionValue(ctx, func(child *pgfx.Tx) (int, error) {
-			return child.FetchValue[int](ctx, "INSERT INTO value_test VALUES (1) RETURNING id")
+			const query = `
+				INSERT INTO value_test
+				VALUES (
+					1
+				)
+				RETURNING
+					id
+			`
+
+			return child.FetchValue[int](ctx, query)
 		})
 		if err != nil || nested != 1 {
 			t.Fatalf("savepoint: %d, %v", nested, err)
@@ -47,14 +62,24 @@ func TestTransactionValuePostgres(t *testing.T) {
 			t.Fatalf("rollback: %d, %v", failed, err)
 		}
 
-		return tx.FetchValue[int](ctx, "SELECT COUNT(*) FROM value_test")
+		return tx.FetchValue[int](ctx, "SELECT count(*) FROM value_test")
 	})
 	if err != nil || got != 1 {
 		t.Fatalf("commit: %d, %v", got, err)
 	}
 
 	got, err = db.TransactionValue(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) (int, error) {
-		_, err := tx.Exec(ctx, "CREATE TEMP TABLE value_commit_failure (id int UNIQUE DEFERRABLE INITIALLY DEFERRED) ON COMMIT DROP; INSERT INTO value_commit_failure VALUES (1), (1)")
+		const query = `
+			CREATE TEMP TABLE value_commit_failure (
+				id int UNIQUE DEFERRABLE INITIALLY DEFERRED
+			) ON COMMIT DROP;
+			INSERT INTO value_commit_failure
+			VALUES (
+				1
+			), (1)
+		`
+
+		_, err := tx.Exec(ctx, query)
 
 		if err != nil {
 			return 0, err
@@ -68,7 +93,17 @@ func TestTransactionValuePostgres(t *testing.T) {
 
 	// Keep the fixture on one pooled connection and create it outside the
 	// transactions under test so rollback cannot remove the table itself.
-	if _, err := db.Exec(ctx, "CREATE TEMP TABLE value_rollback (id int PRIMARY KEY); INSERT INTO value_rollback VALUES (0)"); err != nil {
+	const query = `
+		CREATE TEMP TABLE value_rollback (
+			id int PRIMARY KEY
+		);
+		INSERT INTO value_rollback
+		VALUES (
+			0
+		)
+	`
+
+	if _, err := db.Exec(ctx, query); err != nil {
 		t.Fatal(err)
 	}
 

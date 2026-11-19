@@ -139,11 +139,11 @@ func TestFxAfterConnectFailure(t *testing.T) {
 			errExpected := errors.New("type registration failed")
 			var connection *DB
 			hook := WithAfterConnect(func(context.Context, *pgx.Conn) error { return errExpected })
-			module := MakeModule(hook)
+			module := MakeModule(hook, WithStartupPing())
 			supply := fx.Supply(cfg)
 			invoke := fx.Populate(&connection)
 			if len(name) != 0 {
-				module = MakeModuleFor(name, hook)
+				module = MakeModuleFor(name, hook, WithStartupPing())
 				supply = fx.Supply(fx.Annotate(cfg, fx.ResultTags(`name:"replica"`)))
 				invoke = fx.Invoke(fx.Annotate(
 					func(c *DB) { connection = c },
@@ -184,7 +184,7 @@ func TestFxAfterConnectCancellation(t *testing.T) {
 	app := fx.New(
 		fx.NopLogger,
 		fx.Supply(cfg),
-		MakeModule(WithAfterConnect(func(ctx context.Context, _ *pgx.Conn) error {
+		MakeModule(WithStartupPing(), WithAfterConnect(func(ctx context.Context, _ *pgx.Conn) error {
 			entered <- struct{}{}
 			<-ctx.Done()
 			finished <- struct{}{}

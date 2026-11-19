@@ -11,8 +11,9 @@ import (
 // a monitor. Enabled Fx checks require HealthModule at the application root,
 // and all durations must be explicitly positive, with Timeout <= Interval <= FailureAfter.
 //
-// Checks run sequentially after the startup Ping, with Interval before the first
-// check and between completed checks. Timeout includes pool acquisition. The
+// Checks run sequentially after startup (after the startup Ping when
+// WithStartupPing is set), with Interval before the first check and between
+// completed checks. Timeout includes pool acquisition. The
 // first completed significant failure starts the failure window. Success or an
 // error outside the policy resets it; an ignored error is not a recovery event.
 // A subsequent significant failure at or beyond FailureAfter requests Fx shutdown once
@@ -22,11 +23,11 @@ import (
 // SQLSTATE errors count only when selected by WithHealthSQLStates. Pass
 // DefaultHealthSQLStates() explicitly for the recommended codes. Transport and
 // TLS failures without SQLSTATE, closed connections and check timeouts count
-// independently. Unknown errors do not count. Startup Ping is not filtered.
+// independently. Unknown errors do not count. A startup Ping, when enabled, is not filtered.
 // Pool saturation also counts as unavailability. This policy does not diagnose
 // connection loss or replace pgxpool's idle-connection maintenance checks.
 type HealthConfig struct {
-	// IsEnabled starts periodic checks after the Fx connection's startup Ping.
+	// IsEnabled starts periodic checks after the Fx connection starts.
 	IsEnabled bool `env:"IS_ENABLED" envDescription:"Enable Fx shutdown on sustained pool health check failures; disabled by default."`
 	// Interval is the delay before the first check and between completed checks.
 	Interval time.Duration `env:"INTERVAL" envDescription:"Delay between pool health checks; required and positive when enabled."`

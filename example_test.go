@@ -81,7 +81,16 @@ func ExampleDB_FetchRow() {
 	db := makeExampleDB()
 	defer db.Close()
 
-	item, err := db.FetchRow[order](context.Background(), `SELECT id, amount, meta FROM orders WHERE id=$1`, 42)
+	const query = `
+		SELECT
+			id,
+			amount,
+			meta
+		FROM orders
+		WHERE id = $1
+	`
+
+	item, err := db.FetchRow[order](context.Background(), query, 42)
 	if err != nil {
 		log.Print(err)
 
@@ -95,7 +104,17 @@ func ExampleDB_FetchRows() {
 	db := makeExampleDB()
 	defer db.Close()
 
-	list, err := db.FetchRows[order](context.Background(), `SELECT id, amount, meta FROM orders WHERE amount >= $1 ORDER BY id`, 100)
+	const query = `
+		SELECT
+			id,
+			amount,
+			meta
+		FROM orders
+		WHERE amount >= $1
+		ORDER BY id
+	`
+
+	list, err := db.FetchRows[order](context.Background(), query, 100)
 	if err != nil {
 		log.Print(err)
 
@@ -109,7 +128,18 @@ func ExampleDB_FetchValue() {
 	db := makeExampleDB()
 	defer db.Close()
 
-	id, err := db.FetchValue[int64](context.Background(), `INSERT INTO orders (amount) VALUES ($1) RETURNING id`, 100)
+	const query = `
+		INSERT INTO orders (
+			amount
+		)
+		VALUES (
+			$1
+		)
+		RETURNING
+			id
+	`
+
+	id, err := db.FetchValue[int64](context.Background(), query, 100)
 	if err != nil {
 		log.Print(err)
 
@@ -123,7 +153,15 @@ func ExampleDB_FetchValues() {
 	db := makeExampleDB()
 	defer db.Close()
 
-	ids, err := db.FetchValues[int64](context.Background(), `SELECT id FROM orders WHERE amount >= $1 ORDER BY id`, 100)
+	const query = `
+		SELECT
+			id
+		FROM orders
+		WHERE amount >= $1
+		ORDER BY id
+	`
+
+	ids, err := db.FetchValues[int64](context.Background(), query, 100)
 	if err != nil {
 		log.Print(err)
 
@@ -142,14 +180,33 @@ func ExampleDB_Transaction() {
 		ctx,
 		pgx.TxOptions{},
 		func(tx *pgfx.Tx) error {
-			item, err := tx.FetchRow[order](ctx, `SELECT id, amount, meta FROM orders WHERE id=$1 FOR UPDATE`, 42)
+			const query = `
+				SELECT
+					id,
+					amount,
+					meta
+				FROM orders
+				WHERE id = $1
+				FOR UPDATE
+			`
+
+			item, err := tx.FetchRow[order](ctx, query, 42)
 			if err != nil {
 				return err
 			}
 
+			const updateQuery = `
+				UPDATE orders
+				SET
+					amount = $1
+				WHERE id = $2
+				RETURNING
+					id
+			`
+
 			_, err = tx.FetchValue[int64](
 				ctx,
-				`UPDATE orders SET amount=$1 WHERE id=$2 RETURNING id`,
+				updateQuery,
 				item.Amount+100,
 				item.ID,
 			)
@@ -174,7 +231,18 @@ func ExampleTx_Transaction() {
 			return tx.Transaction(
 				ctx,
 				func(nested *pgfx.Tx) error {
-					_, err := nested.FetchValue[int64](ctx, `INSERT INTO orders (amount) VALUES ($1) RETURNING id`, 100)
+					const query = `
+						INSERT INTO orders (
+							amount
+						)
+						VALUES (
+							$1
+						)
+						RETURNING
+							id
+					`
+
+					_, err := nested.FetchValue[int64](ctx, query, 100)
 
 					return err
 				},
@@ -236,7 +304,18 @@ func ExampleTx_BeginNested() {
 			}
 			defer nested.Rollback(ctx)
 
-			if _, err := nested.FetchValue[int64](ctx, `INSERT INTO orders (amount) VALUES ($1) RETURNING id`, 100); err != nil {
+			const query = `
+				INSERT INTO orders (
+					amount
+				)
+				VALUES (
+					$1
+				)
+				RETURNING
+					id
+			`
+
+			if _, err := nested.FetchValue[int64](ctx, query, 100); err != nil {
 				return err
 			}
 
@@ -280,7 +359,12 @@ func ExampleMakeModule_poolHooks() {
 	_ = fx.New(
 		fx.Supply(pgfx.Config{Host: "localhost:5432", Database: "orders"}),
 		pgfx.MakeModule(pgfx.WithPrepareConn(func(ctx context.Context, conn *pgx.Conn) (bool, error) {
-			_, err := conn.Exec(ctx, "SELECT set_config('statement_timeout', '5s', false)")
+			const query = `
+				SELECT
+					set_config('statement_timeout', '5s', false)
+			`
+
+			_, err := conn.Exec(ctx, query)
 
 			if err != nil {
 				return false, err
