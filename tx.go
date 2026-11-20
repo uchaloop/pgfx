@@ -131,6 +131,24 @@ func (t *Tx) TransactionValue[T any](ctx context.Context, fn func(*Tx) (T, error
 	}, fn)
 }
 
+func transactionValue[T any](run func(func(*Tx) error) error, fn func(*Tx) (T, error)) (T, error) {
+	var value T
+
+	err := run(func(tx *Tx) error {
+		var err error
+		value, err = fn(tx)
+
+		return err
+	})
+	if err != nil {
+		var zero T
+
+		return zero, err
+	}
+
+	return value, nil
+}
+
 // FetchOptionalRow decodes at most one struct row, using the same mapping as
 // FetchRow. An empty result returns the zero value of T, false and nil.
 // Exactly one decoded row returns its value, true and nil. Multiple rows return

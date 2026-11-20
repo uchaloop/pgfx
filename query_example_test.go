@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/uchaloop/pgfx"
 	"github.com/uchaloop/pgfx/page"
 	pgfxtest "github.com/uchaloop/pgfx/test"
 )
@@ -153,4 +154,38 @@ func ExampleDB_FetchPage() {
 
 	fmt.Println(result.List, result.Total)
 	// Prints [{8} {7}] 5.
+}
+
+func ExampleDB_TransactionValue() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db, err := pgfxtest.MakeDB(ctx)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	value, err := db.TransactionValue(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) (int, error) {
+		return tx.FetchValue[int](ctx, "SELECT 1")
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(value)
+}
+
+func ExampleReadWithFallback() {
+	// Fx supplies initialized databases before the consumer's OnStart hook.
+	readNames := func(ctx context.Context, replica, master *pgfx.DB) ([]string, error) {
+		return pgfx.ReadWithFallback(
+			ctx,
+			[]*pgfx.DB{replica, master},
+			func(ctx context.Context, db *pgfx.DB) ([]string, error) {
+				return db.FetchValues[string](ctx, "SELECT name FROM users ORDER BY id")
+			},
+		)
+	}
+	_ = readNames
 }

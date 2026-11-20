@@ -7,6 +7,15 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-20
+
+### Changed
+
+- Grouped database construction, transaction helpers, and pagination types with
+  their related implementations. The public API and query behavior are unchanged.
+- Consolidated related tests and examples and updated the README link to the
+  transaction example.
+
 ## [0.15.0] - 2026-11-20
 
 This release changes the public method signatures of `DB.FetchPage` and `Tx.FetchPage`.
@@ -358,7 +367,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/uchaloop/pgfx/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/uchaloop/pgfx/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/uchaloop/pgfx/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/uchaloop/pgfx/compare/v0.12.0...v0.13.0

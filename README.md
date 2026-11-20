@@ -657,5 +657,5 @@ need to adjust configuration before creating the pool. See [test package](test/d
 ## Reference
 
 - [API reference](https://pkg.go.dev/github.com/uchaloop/pgfx), [page](https://pkg.go.dev/github.com/uchaloop/pgfx/page) and [test](https://pkg.go.dev/github.com/uchaloop/pgfx/test) for published versions.
-- Current source: [package overview](doc.go), [shard API](shard/doc.go), [query examples](query_example_test.go), [transaction examples](transaction_value_example_test.go).
+- Current source: [package overview](doc.go), [shard API](shard/doc.go), [query examples](query_example_test.go), [transaction examples](query_example_test.go#L159).
 - [Contributing and local checks](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [MIT license](LICENSE).

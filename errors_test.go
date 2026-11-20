@@ -60,3 +60,54 @@ func TestPostgresErrorPredicates(t *testing.T) {
 		})
 	}
 }
+
+type postgresErrorAdapter struct{ value *pgconn.PgError }
+
+func (e postgresErrorAdapter) Error() string { return "adapted error" }
+
+func (e postgresErrorAdapter) As(target any) bool {
+	p, isOK := target.(**pgconn.PgError)
+	if isOK {
+		*p = e.value
+	}
+
+	return isOK
+}
+
+func TestAsPgErrorCustomAndJoinOrder(t *testing.T) {
+	first := &pgconn.PgError{Code: "23505"}
+	second := &pgconn.PgError{Code: "23503"}
+
+	for _, err := range []error{postgresErrorAdapter{value: first}, errors.Join(first, second)} {
+		if AsPgError(err) != first {
+			t.Fatal("first matching error lost")
+		}
+	}
+}
+
+func TestIsConstraint(t *testing.T) {
+	first := &pgconn.PgError{Code: "23505", ConstraintName: "users_email_key"}
+	second := &pgconn.PgError{Code: "23503", ConstraintName: "orders_user_key"}
+
+	for _, err := range []error{first, fmt.Errorf("insert: %w", first), errors.Join(first, second), postgresErrorAdapter{value: first}} {
+		if !IsConstraint(err, "23505", "users_email_key") {
+			t.Fatal("constraint not matched")
+		}
+
+		if IsConstraint(err, "23503", "users_email_key") || IsConstraint(err, "23505", "orders_user_key") || IsConstraint(err, "", "users_email_key") || IsConstraint(err, "23505", "") {
+			t.Fatal("unrelated constraint matched")
+		}
+	}
+
+	if IsConstraint(errors.Join(first, second), "23503", "orders_user_key") {
+		t.Fatal("matched second PostgreSQL error")
+	}
+
+	var typedNil *pgconn.PgError
+
+	for _, err := range []error{nil, typedNil, errors.New("other")} {
+		if IsConstraint(err, "23505", "users_email_key") {
+			t.Fatal("non-PostgreSQL error matched")
+		}
+	}
+}
