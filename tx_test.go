@@ -54,6 +54,30 @@ func (tx *fakeNativeTx) Rollback(context.Context) error {
 	return nil
 }
 
+func TestFetchIntoAppendsAndReuses(t *testing.T) {
+	data := makeWarehouseRows(2, 3)
+	tx := makeTx(&fakeNativeTx{rows: data})
+	dst := make([]warehouse, 1, 3)
+	dst[0].ID = 1
+	result, err := tx.FetchRowsInto(context.Background(), dst, "query")
+	if err != nil || len(result) != 3 || result[0].ID != 1 || result[2].ID != 3 || &result[0] != &dst[0] || !data.isClosed {
+		t.Fatalf(
+			"result=%v closed=%v err=%v",
+			result,
+			data.isClosed,
+			err,
+		)
+	}
+
+	values := makeFakeRows([]string{"id"}, []any{int64(7)}, []any{int64(8)})
+	tx = makeTx(&fakeNativeTx{rows: values})
+	buffer := make([]int64, 3)
+	got, err := tx.FetchValuesInto(context.Background(), buffer[:0], "query")
+	if err != nil || len(got) != 2 || got[0] != 7 || got[1] != 8 || &got[0] != &buffer[0] {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+}
+
 func TestTxFetchValueUsesNativeTransaction(t *testing.T) {
 	native := &fakeNativeTx{
 		rows: makeFakeRows([]string{"count"}, []any{int64(3)}),
@@ -153,4 +177,93 @@ func TestTxBeginNestedWrapsNativeTransaction(t *testing.T) {
 	if native.beginCalls != 1 {
 		t.Fatalf("Begin calls = %d, want 1", native.beginCalls)
 	}
+}
+
+type valueNativeTx struct {
+	fakeNativeTx
+	commitErr   error
+	rollbackErr error
+}
+
+func (tx *valueNativeTx) Commit(ctx context.Context) error {
+	_ = tx.fakeNativeTx.Commit(ctx)
+
+	return tx.commitErr
+}
+
+func (tx *valueNativeTx) Rollback(ctx context.Context) error {
+	err := tx.fakeNativeTx.Rollback(ctx)
+	if err != nil {
+		return err
+	}
+
+	return tx.rollbackErr
+}
+
+func TestTransactionValue(t *testing.T) {
+	errExpected := errors.New("operation failed")
+
+	for _, item := range []struct {
+		name        string
+		beginErr    error
+		callbackErr error
+		commitErr   error
+		rollbackErr error
+		wantErr     error
+	}{
+		{name: "success"},
+		{name: "begin", beginErr: errExpected, wantErr: errExpected},
+		{name: "callback", callbackErr: errExpected, wantErr: errExpected},
+		{name: "commit", commitErr: errExpected, wantErr: errExpected},
+		{
+			name:        "rollback",
+			callbackErr: errExpected,
+			rollbackErr: errors.New("rollback failed"),
+			wantErr:     errExpected,
+		},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			nested := &valueNativeTx{commitErr: item.commitErr, rollbackErr: item.rollbackErr}
+			root := makeTx(&fakeNativeTx{nested: nested, beginErr: item.beginErr})
+			isCalled := false
+
+			got, err := root.TransactionValue(context.Background(), func(tx *Tx) (*int, error) {
+				isCalled = true
+				if tx.Tx != nested {
+					t.Fatal("wrong transaction")
+				}
+
+				value := 7
+
+				return &value, item.callbackErr
+			})
+			if !errors.Is(err, item.wantErr) {
+				t.Fatalf("error: %v, want %v", err, item.wantErr)
+			}
+
+			if item.wantErr != nil && got != nil {
+				t.Fatal("result escaped failed transaction")
+			}
+
+			if item.wantErr == nil && (got == nil || *got != 7) {
+				t.Fatalf("result: %v", got)
+			}
+
+			if isCalled != (item.beginErr == nil) {
+				t.Fatal("unexpected callback execution")
+			}
+		})
+	}
+}
+
+func TestTransactionValuePanic(t *testing.T) {
+	nested := &fakeNativeTx{}
+	root := makeTx(&fakeNativeTx{nested: nested})
+	defer func() {
+		if recover() != "failure" || nested.rollbackCalls != 1 {
+			t.Fatal("panic or rollback lost")
+		}
+	}()
+
+	_, _ = root.TransactionValue(context.Background(), func(*Tx) (int, error) { panic("failure") })
 }

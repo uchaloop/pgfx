@@ -289,6 +289,33 @@ func TestCollectPropagatesQueryError(t *testing.T) {
 	}
 }
 
+func TestFetchIntoGrowsAndClosesOnError(t *testing.T) {
+	rows := makeFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)})
+	got, err := collectInto(
+		context.Background(),
+		fakeQuerier{rows: rows},
+		make([]int64, 0, 1),
+		pgx.RowTo[int64],
+		"query",
+	)
+	if err != nil || len(got) != 2 || !rows.isClosed {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+
+	bad := makeFakeRows([]string{"id"}, []any{int64(1)}, []any{"invalid"})
+	buffer := make([]int64, 0, 2)
+	got, err = collectInto(
+		context.Background(),
+		fakeQuerier{rows: bad},
+		buffer,
+		pgx.RowTo[int64],
+		"query",
+	)
+	if err == nil || got != nil || !bad.isClosed || buffer[:1][0] != 1 {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+}
+
 func TestCollectClosesRowsOnScanError(t *testing.T) {
 	errExpected := errors.New("scan failed")
 	rows := makeFakeRows([]string{"id"}, []any{int64(1)})
