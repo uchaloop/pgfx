@@ -149,21 +149,24 @@ func (t *Tx) FetchOptionalRow[T any](ctx context.Context, sql string, args ...an
 // FetchPage runs one page query and returns its rows with the number of rows
 // the query matches across all pages. Rows map to T as in FetchRows.
 //
+// Pass page.Bounds for a query with its own ORDER BY. For a page.Selection,
+// use ORDER BY @order and supply only filter values in args.
+//
 // The query must reference @limit and @offset and end with a bigint column
-// named total, usually count(*) OVER () AS total. FetchPage binds b to @limit
-// and @offset; args must not set them. When the page lies past the end of a
+// named total, usually count(*) OVER () AS total. FetchPage binds the page size to @limit
+// and the offset to @offset; args must not set them. When the page lies past the end of a
 // non-empty result, FetchPage runs the query once more with offset 0 to read
 // the total. List is non-nil on success.
 //
 // The window total is evaluated before DISTINCT, so the query must not use
 // SELECT DISTINCT; use GROUP BY instead. Invalid bounds return page.ErrBounds
-// before the query runs.
-func (t *Tx) FetchPage[T any](ctx context.Context, sql string, args pgx.NamedArgs, b page.Bounds) (page.Result[T], error) {
+// before the query runs. A nil spec or a typed nil pointer also returns page.ErrBounds.
+func (t *Tx) FetchPage[T any](ctx context.Context, sql string, args pgx.NamedArgs, spec page.Spec) (page.Result[T], error) {
 	return collectPage[T](
 		ctx,
 		t.Tx,
 		sql,
 		args,
-		b,
+		spec,
 	)
 }

@@ -139,3 +139,46 @@ func TestTotalRowHidesTotal(t *testing.T) {
 		t.Fatalf("id = %d, total = %d, %v", id, total, err)
 	}
 }
+
+func TestInvalidPageSpecs(t *testing.T) {
+	var b *page.Bounds
+	var s *page.Selection
+
+	for _, spec := range []page.Spec{nil, b, s, page.Selection{}} {
+		_, err := collectPage[pageItem](
+			context.Background(),
+			nil,
+			"",
+			nil,
+			spec,
+		)
+		if !errors.Is(err, page.ErrBounds) {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPageRejectsExcessRows(t *testing.T) {
+	rows := makeFakeRows([]string{"id", "total"}, []any{int64(1), int64(2)}, []any{int64(2), int64(2)})
+	result, err := collectPage[pageItem](
+		context.Background(),
+		fakeQuerier{rows: rows},
+		"select @limit, @offset",
+		nil,
+		page.Bounds{Limit: 1},
+	)
+	if err == nil || result.List != nil || result.Total != 0 || !rows.isClosed {
+		t.Fatalf("result=%+v err=%v closed=%v", result, err, rows.isClosed)
+	}
+}
+
+func TestBoundsRequireExactMarkers(t *testing.T) {
+	for _, sql := range []string{"select @offset, '@limit'", "select @limit, @offsetExtra", "select @offset /* @limit */", "select @limit, $$@offset$$"} {
+		if hasPageBounds(sql) {
+			t.Fatal(sql)
+		}
+	}
+	if !hasPageBounds("select @order limit @limit offset @offset") {
+		t.Fatal("missing bounds")
+	}
+}

@@ -277,66 +277,100 @@ application contract makes repetition safe.
 
 ## Pagination
 
-`page.MakeBounds` converts a 1-based page number and size into LIMIT/OFFSET.
-`FetchPage` returns `page.Result[T]{List, Total}`. The SQL must bind `@limit`
-and `@offset`, and its **last column must be a bigint named `total`**.
-Do not supply `limit` or `offset` in `pgx.NamedArgs`.
+Use a `page.Pager` to fetch numbered pages with a total count. Configure it once
+for each list. Lists can share a size policy or use different minimum, maximum,
+and default sizes.
 
 ```go
-func listPage(ctx context.Context, db *pgfx.DB, number, size int) (page.Result[Item], error) {
-	bounds, err := page.MakeBounds(number, size)
+func makeItemPager() (page.Pager, error) {
+	const minSize, maxSize, defaultSize = 1, 100, 20
+	limits, err := page.MakeLimits(minSize, maxSize, defaultSize)
+	if err != nil {
+		return page.Pager{}, err
+	}
+
+	return page.MakePager(limits, page.SortConfig{
+		Fields: page.SortFields{"name": "i.name", "id": "i.id"},
+		Tie:    "i.id",
+	})
+}
+```
+
+For each request, resolve the page number, size, and sort values. Pass the
+selection to `db.FetchPage` or `tx.FetchPage`. The query must include one
+`@order` marker, `@limit`, and `@offset`. Pass filter values in
+`pgx.NamedArgs`; pgfx supplies the three pagination parameters.
+
+```go
+type Item struct {
+	ID   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
+func listItems(ctx context.Context, db *pgfx.DB, pager page.Pager,
+	number, size int, sort []string, category string,
+) (page.Result[Item], error) {
+	selection, err := pager.Resolve(number, size, sort)
 	if err != nil {
 		return page.Result[Item]{}, err
 	}
 
 	const query = `
-		SELECT
-			id,
-			name,
-			price,
-			count(*) OVER () AS total
-		FROM items
-		WHERE price >= @min
-		ORDER BY id
-		LIMIT @limit
-		OFFSET @offset
+		SELECT i.id, i.name, count(*) OVER () AS total
+		FROM items AS i
+		WHERE i.category = @category
+		ORDER BY @order
+		LIMIT @limit OFFSET @offset
 	`
 
 	return db.FetchPage[Item](
 		ctx,
 		query,
-		pgx.NamedArgs{"min": 0},
-		bounds,
+		pgx.NamedArgs{"category": category},
+		selection,
 	)
 }
 ```
 
-Validate the maximum page size in your application; `MakeBounds` does not cap it.
-An empty page has a non-nil `List`. For a requested offset greater than zero
-that yields no rows, pgfx repeats the query with offset 0 and limit 1 to obtain
-`Total`. Use a repeatable-read transaction when both statements need one snapshot.
-Queries must be safe to repeat. Avoid `SELECT DISTINCT` with a window total;
-perform deduplication before the window calculation, for example with `GROUP BY`.
-Counting all matches and deep OFFSETs can be expensive; pgfx does not hide that cost.
+Page numbers start at 1. A number below 1 selects the first page. A size below
+1 selects the default; positive sizes are clamped to the configured range.
+An offset that overflows returns `page.ErrBounds`. To enforce a ceiling for one
+list, use the copy returned by `limits.WithMaxOffset(maxOffset)` when creating
+its pager. Offsets above the ceiling return `page.ErrBounds` before querying.
+Choose the ceiling and a request deadline for your workload. Pass the same
+deadline-bearing context through fallback and both page reads. A ceiling
+limits depth; the exact count can still scan all matching rows.
 
 ### Sorting
 
-`page.Sortable` maps request keys to trusted SQL expressions. `OrderBy` returns
-an expression list without the `ORDER BY` keyword:
+For page 2, size 10, and `[]string{"name:desc"}`, the example orders by
+`i.name DESC, i.id DESC` and skips 10 rows. Configure public field names with
+trusted, application-defined SQL expressions and choose a trusted unique tie column so rows with equal
+names have a consistent order.
 
-```go
-func itemOrder(keys []page.Key[string]) (string, error) {
-	sortable := page.Sortable[string]{"name": "name", "price": "price"}
+`Resolve` uses the first recognized field, ignoring case and surrounding
+spaces. Only `desc` selects descending order. With no recognized field, the
+pager orders by the tie column ascending.
 
-	return sortable.OrderBy(keys, "id")
-}
-```
+### Results and query cost
 
-Insert only this validated result into your query. The mapping and unique tie
-column (`id` here) must be trusted application SQL, never request text.
-Unknown or repeated keys return `page.ErrSort`. The tie column stabilizes order;
-its direction follows the last requested key. See the [combined page and sorting
-example](query_example_test.go) and [sorting contract](page/sort.go).
+`Result.List` contains the page rows; `Result.Total` counts all matching rows.
+Return a final `bigint` column named `total`, usually `count(*) OVER () AS total`.
+If the query needs distinct items, deduplicate before computing the window count.
+FetchPage returns an error and discards the partial list if the query returns more rows than requested. A full count and a deep offset can both be expensive.
+
+An empty page has a non-nil list. If a positive offset yields no rows, pgfx
+repeats the query with limit 1 and offset 0 to read the total. Use a repeatable-read
+transaction when both reads must see the same snapshot.
+
+### Queries with their own order
+
+For a fixed SQL order such as `ORDER BY id`, pass `page.Bounds` directly to
+`FetchPage` and use only `@limit` and `@offset` for pagination.
+`page.MakeBounds(number, size)` requires positive inputs and applies no size cap.
+Use `limits.Bounds(number, size)` to apply your configured defaults and limits.
+For explicit multi-column sorting, see [Sortable.OrderBy](page/sort.go) and the
+[query example](query_example_test.go).
 
 ## Errors
 

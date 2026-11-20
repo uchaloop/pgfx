@@ -7,6 +7,30 @@ and this module adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-20
+
+This release changes the public method signatures of `DB.FetchPage` and `Tx.FetchPage`.
+
+### Added
+
+- Configure page sizes with `page.MakeLimits` and optionally cap the offset
+  with `Limits.WithMaxOffset`. Requests beyond the configured ceiling return
+  `page.ErrBounds` before the query runs.
+- Configure a reusable `page.Pager` with trusted sort expressions and a unique
+  tie column. Pass the result of `Pager.Resolve` to `FetchPage` and use
+  `ORDER BY @order LIMIT @limit OFFSET @offset` in the query. Filter values
+  remain bound parameters.
+
+### Changed
+
+- `DB.FetchPage` and `Tx.FetchPage` now accept `page.Spec`. Direct calls
+  with `page.Bounds` still compile. Update interfaces and function types that
+  specify the old method signature.
+- Page queries must contain complete `@limit` and `@offset` parameter names.
+  Markers inside literals or comments do not satisfy this check.
+- If a query returns more rows than the requested limit, `FetchPage` now
+  returns an error and discards the partial result.
+
 ## [0.14.0] - 2026-11-19
 
 This release contains breaking API changes.
@@ -334,7 +358,8 @@ This release contains breaking API changes.
   stack - its only config-surface dependency is the zero-dep
   `github.com/uchaloop/secret` module for the masked password.
 
-[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/uchaloop/pgfx/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/uchaloop/pgfx/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/uchaloop/pgfx/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/uchaloop/pgfx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/uchaloop/pgfx/compare/v0.11.0...v0.12.0

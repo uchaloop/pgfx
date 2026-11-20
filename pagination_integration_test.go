@@ -5,6 +5,7 @@ package pgfx_test
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,98 @@ func TestTxFetchPageIntegration(t *testing.T) {
 
 		if result.Total != 10 || len(result.List) != 3 || result.List[0].ID != 4 {
 			t.Fatalf("transaction result: %+v", result)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPagerSelectionIntegration(t *testing.T) {
+	ctx, db, cleanup := makeIntegrationDB(t, 20*time.Second)
+	defer cleanup()
+
+	limits, err := page.MakeLimits(1, 100, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pager, err := page.MakePager(limits, page.SortConfig{
+		Fields: page.SortFields{"officeID": "id"},
+		Tie:    "id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type item struct{ ID int64 }
+
+	const query = `
+		SELECT id, count(*) OVER () AS total
+		FROM generate_series(1::bigint, @max::bigint) id
+		WHERE $$@order$$ = '@order'
+		ORDER BY @order
+		LIMIT @limit OFFSET @offset
+	`
+
+	args := pgx.NamedArgs{"max": 5}
+
+	for _, tc := range []struct {
+		number int
+		want   []item
+	}{
+		{number: 1, want: []item{{ID: 5}, {ID: 4}}},
+		{number: 4, want: []item{}},
+	} {
+		s, err := pager.Resolve(tc.number, 2, []string{"officeID:desc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := db.FetchPage[item](
+			ctx,
+			query,
+			args,
+			s,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got.Total != 5 {
+			t.Fatalf("page %d: total = %d, want 5", tc.number, got.Total)
+		}
+
+		if got.List == nil || !slices.Equal(got.List, tc.want) {
+			t.Fatalf(
+				"page %d: list = %#v, want %#v",
+				tc.number,
+				got.List,
+				tc.want,
+			)
+		}
+	}
+
+	err = db.Transaction(ctx, pgx.TxOptions{}, func(tx *pgfx.Tx) error {
+		s, err := pager.Resolve(2, 2, nil)
+		if err != nil {
+			return err
+		}
+
+		got, err := tx.FetchPage[item](
+			ctx,
+			query,
+			args,
+			s,
+		)
+		if err != nil {
+			return err
+		}
+
+		if got.Total != 5 || !slices.Equal(got.List, []item{{ID: 3}, {ID: 4}}) {
+			t.Fatal(got)
 		}
 
 		return nil
